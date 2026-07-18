@@ -54,6 +54,11 @@ Final Answer: 最终结果
 - 可连续多次调用 ask_user 收集问题；系统会先暂存，不会立刻打断用户。
 - 当你准备输出 Plan / Final Answer 时，系统会把暂存的问题一次性展示给用户确认。
 - 也可以在一次 ask_user 中用 questions 数组提出全部问题。
+
+关于 todo_tracker（多步骤任务必用规范）：
+- add 拆分清单后，对当前项先 start（变为进行中），再调用其它工具干活，做完再 complete。
+- 禁止在尚未执行实际工作前 complete；禁止用 complete 表示「开始」。
+- 每一步必须输出合法的 Action 或非空 Final Answer；空回复会导致任务中断。
 """
 
 
@@ -303,6 +308,8 @@ class ReActAgent:
         # ask_user 跨步暂存；输出 Plan/Final Answer 或遇到其它工具前再一次性询问
         self._ask_buffer: list[dict[str, Any]] = []
         self._ask_seq = 0
+        # 空回复 / 空 Final Answer 时的续跑次数（单次 run 内）
+        self._empty_nudge_count = 0
         # 当前 run 的消息列表引用，供 web ask 落盘检查点
         self._live_messages: list[AIMessage] | None = None
 
@@ -575,6 +582,7 @@ class ReActAgent:
         steps: list[ReActStep] = []
         self._ask_buffer.clear()
         self._ask_seq = 0
+        self._empty_nudge_count = 0
         self._live_messages = messages
         logger.notice(f"ReAct 开始任务，mode={mode.value}，max_steps={self.max_steps}")
 
@@ -623,18 +631,23 @@ class ReActAgent:
                         mode=mode.value,
                     )
                 )
-            raw = response.content.strip()
+            raw = (response.content or "").strip()
             parsed = parse_react_output(raw)
+            # 空 Final Answer 视为无效（常见于模型提前收束）
+            has_final = (
+                parsed.final_answer is not None
+                and bool(str(parsed.final_answer).strip())
+            )
             step = ReActStep(
                 index=i,
                 thought=parsed.thought,
-                final_answer=parsed.final_answer,
+                final_answer=parsed.final_answer if has_final else None,
                 raw_model_output=raw,
             )
 
-            messages.append(AIMessage(role="assistant", content=raw))
+            messages.append(AIMessage(role="assistant", content=raw or "(空回复)"))
 
-            if parsed.final_answer is not None:
+            if has_final:
                 if self._ask_buffer:
                     # 先一次性询问暂存问题；丢掉「把问卷写进 Final Answer」的脏消息
                     messages[-1] = AIMessage(
@@ -701,7 +714,7 @@ class ReActAgent:
                 )
 
             if not parsed.actions:
-                # 有暂存问题却未输出标准 Final Answer/Action：先弹窗问用户，勿直接结束
+                # 有暂存问题却未输出标准 Action/非空 Final Answer：先弹窗问用户
                 if self._ask_buffer:
                     logger.notice(
                         f"第 {i} 步无标准 Action/Final Answer，但有暂存 ask_user，先请用户确认"
@@ -741,8 +754,41 @@ class ReActAgent:
                     )
                     continue
 
+                # 空回复 / 空 Final Answer：续跑提醒，避免长任务半截中断
+                if self._empty_nudge_count < 2:
+                    self._empty_nudge_count += 1
+                    reason = (
+                        "空回复"
+                        if not raw
+                        else (
+                            "空 Final Answer"
+                            if parsed.final_answer is not None
+                            else "未解析到 Action/Final Answer"
+                        )
+                    )
+                    logger.warning(
+                        f"第 {i} 步{reason}，续跑提醒（{self._empty_nudge_count}/2）"
+                    )
+                    steps.append(step)
+                    self._emit_step(step)
+                    messages.append(
+                        AIMessage(
+                            role="user",
+                            content=(
+                                "Observation:\n"
+                                f"系统：上一步无效（{reason}）。任务若未完成，请继续输出 "
+                                "Thought + Action/Action Input；"
+                                "仅在全部完成后输出非空 Final Answer。\n"
+                                "若使用 todo_tracker：先 start 当前项 → 执行工具 → 再 complete。"
+                            ),
+                        )
+                    )
+                    continue
+
                 logger.warning(f"第 {i} 步未解析到 Action/Final Answer，结束循环")
-                fallback = parsed.thought or raw
+                fallback = (parsed.thought or raw or "").strip() or (
+                    "模型连续空回复，任务未完成。请发送「继续」重试。"
+                )
                 step.final_answer = fallback
                 plan = None
                 if mode is AgentMode.PLAN:
@@ -903,7 +949,19 @@ class ReActAgent:
                 item["change"] = change
                 changes.append(change)
             actions.append(item)
-        return {
+        todos = None
+        for call in step.calls:
+            if (
+                call.action == "todo_tracker"
+                and call.ok
+                and isinstance(call.data, dict)
+                and isinstance(call.data.get("items"), list)
+            ):
+                todos = {
+                    "items": call.data.get("items") or [],
+                    "counts": call.data.get("counts") or {},
+                }
+        payload: dict[str, Any] = {
             "type": "step",
             "index": step.index,
             "thought": (step.thought or "").strip(),
@@ -912,6 +970,9 @@ class ReActAgent:
             "final_answer": step.final_answer,
             "text": format_step_detail(step, level, max_chars=max_chars),
         }
+        if todos is not None:
+            payload["todos"] = todos
+        return payload
 
     def _emit_step(self, step: ReActStep) -> None:
         # 结构化进度始终推送（与 detail 开关无关），供 Web/CLI 实时展示

@@ -57,7 +57,7 @@ react:
       git_ops: [status, diff, log, branch, show]
       web_fetch: [fetch]
       diff_review: [review]
-      todo_tracker: [list]
+      todo_tracker: [list, start]
       screenshot: [read]
       nodejs: [version]
       python: [version, compile]
@@ -171,7 +171,7 @@ permission:
         diff_review:
           actions: [review]
         todo_tracker:
-          actions: [list]
+          actions: [list, start]
         screenshot:
           actions: [read]
         nodejs:
@@ -213,7 +213,7 @@ permission:
         diff_review:
           actions: [review]
         todo_tracker:
-          actions: [list, add, complete, remove, clear, update]
+          actions: [list, add, start, complete, remove, clear, update]
         screenshot:
           actions: [capture, read]
         browser:

@@ -691,7 +691,21 @@ class WorkspaceStore:
         else:
             summary["pending_plan"] = None
         summary["pending_ask"] = self.get_pending_ask(conv.session_id)
+        summary["todos"] = self._load_todos(str(conv.agent.workdir))
         return summary
+
+    def get_todos(self, session_id: str) -> dict[str, Any]:
+        conv = self._get_or_load(session_id)
+        return self._load_todos(str(conv.agent.workdir))
+
+    @staticmethod
+    def _load_todos(workdir: str) -> dict[str, Any]:
+        from skills.todo_tracker import load_todos
+
+        try:
+            return load_todos(workdir)
+        except Exception:  # noqa: BLE001
+            return {"items": [], "updated_at": None, "counts": {}}
 
     def get_pending_ask(self, session_id: str) -> dict[str, Any] | None:
         """返回当前等待用户作答的 ask_user 事件（若有；含重启后孤儿检查点）。"""

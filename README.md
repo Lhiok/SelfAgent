@@ -386,12 +386,13 @@ Git 仓库操作。默认只读；`allow_write: true` 后才可 `add`/`commit`�
 
 ## Skill：todo_tracker
 
-跨步骤任务清单，落盘 `.selfagent/todos.json`。
+跨步骤任务清单，落盘 `.selfagent/todos.json`。规范生命周期：`add` → `start`（进行中）→ 真正干活 → `complete`。未 `start` 不能直接 `complete`（除非 `force:true`）。Web 工作台会在对话下方展示进度条。
 
 ```json
 {"action":"add","items":["修编译错误","补单测"]}
-{"action":"list"}
+{"action":"start","id":"abc123","note":"开始修编译"}
 {"action":"complete","id":"abc123"}
+{"action":"list"}
 ```
 
 ## Skill：screenshot

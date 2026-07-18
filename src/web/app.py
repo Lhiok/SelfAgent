@@ -129,6 +129,15 @@ def create_app(store: WorkspaceStore | None = None) -> FastAPI:
         except RuntimeError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @app.get("/api/sessions/{session_id}/todos")
+    def get_todos(session_id: str) -> dict[str, Any]:
+        try:
+            return store_of().get_todos(session_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.patch("/api/sessions/{session_id}")
     def patch_session(session_id: str, body: SessionPatch) -> dict[str, Any]:
         try:

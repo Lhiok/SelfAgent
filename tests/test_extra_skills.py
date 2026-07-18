@@ -34,12 +34,34 @@ def test_todo_tracker_lifecycle(tmp_path: Path):
     items = added.data["items"]
     assert len(items) == 2
     tid = items[0]["id"]
+
+    # 禁止未 start 直接 complete
+    premature = skill.run(action="complete", id=tid)
+    assert not premature.ok
+    assert "start" in premature.output.lower() or "pending" in premature.output.lower()
+
+    started = skill.run(action="start", id=tid, note="开工")
+    assert started.ok
+    assert any(it["id"] == tid and it["status"] == "in_progress" for it in started.data["items"])
+
     done = skill.run(action="complete", id=tid)
     assert done.ok
     assert any(it["id"] == tid and it["status"] == "done" for it in done.data["items"])
     listed = skill.run(action="list")
     assert "任务清单" in listed.output
     assert (tmp_path / ".selfagent" / "todos.json").is_file()
+
+
+def test_todo_tracker_start_switches_active(tmp_path: Path):
+    skill = TodoTrackerSkill(root=tmp_path)
+    added = skill.run(action="add", items=["one", "two"])
+    a, b = added.data["items"][0]["id"], added.data["items"][1]["id"]
+    skill.run(action="start", id=a)
+    again = skill.run(action="start", id=b)
+    assert again.ok
+    by_id = {it["id"]: it["status"] for it in again.data["items"]}
+    assert by_id[a] == "pending"
+    assert by_id[b] == "in_progress"
 
 
 def test_diff_review_text_risks():

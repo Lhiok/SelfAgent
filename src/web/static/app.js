@@ -11,6 +11,7 @@
     streaming: false, // 是否有活动 SSE（刷新后为 false，但仍可能有 pending_ask）
     // 右侧面板：{ type:'change'|'plan'|'detail'|'ask', key, ... }
     inspector: null,
+    todos: null, // { items, counts } 工作区任务清单
   };
 
   const $ = (id) => document.getElementById(id);
@@ -33,6 +34,7 @@
   const changePanelBody = $("change-panel-body");
   const resizeInspector = $("resize-inspector");
   const inputInspectorWidth = $("input-inspector-width");
+  const todoBar = $("todo-bar");
   const shellEl = document.getElementById("app");
 
   const INSPECTOR_WIDTH_KEY = "selfagent.inspectorWidth";
@@ -406,6 +408,64 @@
     return li;
   }
 
+  function setTodos(todos) {
+    if (!todos || !Array.isArray(todos.items)) {
+      state.todos = null;
+    } else {
+      state.todos = {
+        items: todos.items,
+        counts: todos.counts || {},
+        updated_at: todos.updated_at || null,
+      };
+    }
+    renderTodoBar();
+  }
+
+  function renderTodoBar() {
+    if (!todoBar) return;
+    const todos = state.todos;
+    const items = (todos && todos.items) || [];
+    if (!items.length) {
+      todoBar.classList.add("hidden");
+      todoBar.innerHTML = "";
+      return;
+    }
+    const c = todos.counts || {};
+    const done = c.done || 0;
+    const total = c.total || items.length;
+    const pct = total ? Math.round((done / total) * 100) : 0;
+    const active =
+      items.find((it) => it.status === "in_progress") ||
+      items.find((it) => it.status === "pending");
+    todoBar.classList.remove("hidden");
+    todoBar.innerHTML = `
+      <div class="todo-bar-head">
+        <span class="todo-bar-title">任务清单</span>
+        <span class="todo-bar-meta">${done}/${total} · ${pct}%</span>
+      </div>
+      <div class="todo-bar-track"><div class="todo-bar-fill" style="width:${pct}%"></div></div>
+      <ul class="todo-bar-list">
+        ${items
+          .slice(0, 8)
+          .map((it) => {
+            const st = it.status || "pending";
+            const mark =
+              st === "done" ? "✓" : st === "in_progress" ? "→" : st === "cancelled" ? "×" : "·";
+            return `<li class="todo-item st-${st}"><span class="todo-mark">${mark}</span><span class="todo-text">${escapeHtml(
+              it.title || ""
+            )}</span></li>`;
+          })
+          .join("")}
+        ${items.length > 8 ? `<li class="todo-more">…另有 ${items.length - 8} 项</li>` : ""}
+      </ul>
+      ${
+        active
+          ? `<div class="todo-bar-current">当前：${escapeHtml(active.title || "")}</div>`
+          : ""
+      }
+    `;
+  }
+
   function renderSession() {
     const s = state.session;
     const live = state.live;
@@ -414,6 +474,7 @@
       sessionTitle.textContent = "选择或新建对话";
       sessionPath.textContent = "";
       messagesEl.innerHTML = `<div class="empty-state"><p class="empty-title">SelfAgent</p><p>添加工作目录，再新建对话开始任务。</p></div>`;
+      setTodos(null);
       return;
     }
 
@@ -424,6 +485,8 @@
       document.querySelectorAll(".seg-btn").forEach((btn) => {
         btn.classList.toggle("active", btn.dataset.mode === (s.mode || "agent"));
       });
+      if (s.todos) setTodos(s.todos);
+      else renderTodoBar();
     }
 
     messagesEl.innerHTML = "";
@@ -2252,6 +2315,10 @@
       };
       if (idx >= 0) state.live.steps[idx] = item;
       else state.live.steps.push(item);
+      if (event.todos && Array.isArray(event.todos.items)) {
+        setTodos(event.todos);
+        if (state.session) state.session.todos = event.todos;
+      }
       const n = (event.changes || []).length;
       if (!state.live.ask) {
         state.live.status = event.final_answer
