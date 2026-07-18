@@ -11,6 +11,11 @@ import config as cfg
 from ai import AIClient, AIMessage, create_ai_client
 from log import get_logger
 from permission import PermissionGuard
+from react.changes import (
+    collect_changes_from_steps,
+    extract_change_from_call,
+    merge_changes_by_path,
+)
 from react.detail import (
     DETAIL_OFF,
     format_result_detail,
@@ -19,12 +24,20 @@ from react.detail import (
 )
 from react.mode import AgentMode
 from react.parser import parse_react_output
-from react.plan import PLAN_SYSTEM_PROMPT, Plan, parse_plan
+from react.plan import (
+    PLAN_SYSTEM_PROMPT,
+    Plan,
+    clean_plan_summary,
+    parse_plan,
+)
 from skills import SkillRegistry, SkillResult
+from skills.ask_user import coerce_questions
 
 logger = get_logger("react")
 
 DetailHandler = Callable[[str], None]
+# 进度事件：{"type":"status"|"step", ...}，供 CLI/Web 实时展示
+ProgressHandler = Callable[[dict[str, Any]], None]
 
 DEFAULT_SYSTEM_PROMPT = """你是一个可调用工具的助手。请严格使用 ReAct 格式回复：
 Thought: 思考下一步
@@ -36,6 +49,11 @@ Final Answer: 最终结果
 
 可以在同一次回复中连续输出多个 Action / Action Input（按顺序执行）。
 工具之间互不依赖时可并行规划多个调用；需要上一步结果时再分步调用。
+
+关于 ask_user：
+- 可连续多次调用 ask_user 收集问题；系统会先暂存，不会立刻打断用户。
+- 当你准备输出 Plan / Final Answer 时，系统会把暂存的问题一次性展示给用户确认。
+- 也可以在一次 ask_user 中用 questions 数组提出全部问题。
 """
 
 
@@ -45,6 +63,7 @@ class ActionCall:
     action_input: str
     observation: str | None = None
     ok: bool | None = None
+    data: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -135,6 +154,44 @@ def _format_observations(calls: list[ActionCall]) -> str:
     return "\n\n".join(lines)
 
 
+def _summarize_plan_execution(steps: list[ReActStep]) -> str:
+    """生成简洁的计划执行摘要（同文件多处改动合并，避免重复罗列）。"""
+    changes = collect_changes_from_steps(steps)
+    step_n = len(steps)
+    ok_n = sum(1 for s in steps if s.calls and s.calls[0].ok is not False)
+
+    if changes:
+        patch_n = sum(int(c.get("patch_count") or 1) for c in changes)
+        head = f"计划执行完成：{len(changes)} 个文件"
+        if patch_n > len(changes):
+            head += f"，{patch_n} 处改动"
+        elif step_n > len(changes):
+            head += f"（共 {step_n} 步）"
+        lines = [head]
+        for ch in changes:
+            path = str(ch.get("path") or "").replace("\\", "/")
+            kind = str(ch.get("kind") or "patch")
+            label = {
+                "write": "新建",
+                "overwrite": "覆盖",
+                "patch": "修改",
+                "move": "移动",
+            }.get(kind, kind)
+            n = int(ch.get("patch_count") or 1)
+            if kind == "move" and ch.get("dest"):
+                dest = str(ch.get("dest")).replace("\\", "/")
+                lines.append(f"· {label} {path} → {dest}")
+            elif n > 1:
+                lines.append(f"· {label} {path}（{n} 处）")
+            else:
+                lines.append(f"· {label} {path}")
+        return "\n".join(lines)
+
+    if ok_n == step_n:
+        return f"计划执行完成（{step_n} 步）"
+    return f"计划执行完成：成功 {ok_n}/{step_n} 步"
+
+
 class ReActAgent:
     def __init__(
         self,
@@ -154,6 +211,7 @@ class ReActAgent:
         stream_detail: bool | None = None,
         detail_max_chars: int | None = None,
         on_detail: DetailHandler | None = None,
+        on_progress: ProgressHandler | None = None,
         workdir: str | Path | None = None,
     ) -> None:
         react_cfg = cfg.get_section("react", {}) or {}
@@ -234,6 +292,12 @@ class ReActAgent:
             else int(react_cfg.get("detail_max_chars", 2000))
         )
         self.on_detail = on_detail
+        self.on_progress = on_progress
+        # ask_user 跨步暂存；输出 Plan/Final Answer 或遇到其它工具前再一次性询问
+        self._ask_buffer: list[dict[str, Any]] = []
+        self._ask_seq = 0
+        # 当前 run 的消息列表引用，供 web ask 落盘检查点
+        self._live_messages: list[AIMessage] | None = None
 
         self._system_prompt_base = str(
             system_prompt or react_cfg.get("system_prompt") or DEFAULT_SYSTEM_PROMPT
@@ -267,6 +331,7 @@ class ReActAgent:
             stream_detail=self.stream_detail,
             detail_max_chars=self.detail_max_chars,
             on_detail=self.on_detail,
+            on_progress=self.on_progress,
             workdir=self.workdir,
             system_prompt=self._system_prompt_base,
         )
@@ -317,9 +382,17 @@ class ReActAgent:
         logger.notice(f"开始执行计划，共 {len(plan.steps)} 步")
         steps: list[ReActStep] = []
         messages: list[AIMessage] = list(history or [])
-        observations: list[str] = []
 
         for plan_step in plan.steps:
+            self._emit_progress(
+                {
+                    "type": "status",
+                    "phase": "acting",
+                    "step": plan_step.index,
+                    "actions": [plan_step.skill],
+                    "message": f"执行计划第 {plan_step.index} 步：{plan_step.skill}…",
+                }
+            )
             react_step = ReActStep(
                 index=plan_step.index,
                 thought=plan_step.why or f"执行计划第 {plan_step.index} 步",
@@ -341,13 +414,11 @@ class ReActAgent:
                     action_input=raw_input,
                     observation=observation,
                     ok=skill_result.ok,
+                    data=dict(skill_result.data or {}),
                 )
             )
             steps.append(react_step)
             self._emit_step(react_step)
-            observations.append(
-                f"[{plan_step.index}] {plan_step.skill}: {observation}"
-            )
             logger.notice(
                 f"计划步骤 {plan_step.index} skill={plan_step.skill} ok={skill_result.ok}"
             )
@@ -366,7 +437,7 @@ class ReActAgent:
                     )
                 )
 
-        answer = "计划执行完成\n" + "\n".join(observations)
+        answer = _summarize_plan_execution(steps)
         return self._finalize_result(
             ReActResult(
                 answer=answer,
@@ -440,6 +511,38 @@ class ReActAgent:
     def _build_prompt(self, mode: AgentMode) -> str:
         return self._format_runtime_prompt(mode)
 
+    def continue_from_messages(
+        self,
+        messages: list[AIMessage],
+        *,
+        observation: str,
+        mode: str | AgentMode | None = None,
+    ) -> ReActResult:
+        """从已落盘的消息续跑（用于重启后恢复 ask_user）。"""
+        run_mode = AgentMode.parse(mode) if mode is not None else self.mode
+        msgs = [
+            AIMessage(role=m.role, content=m.content, name=m.name)
+            for m in (messages or [])
+            if m.role in {"system", "user", "assistant", "tool"}
+        ]
+        prompt = self._build_prompt(run_mode)
+        if msgs and msgs[0].role == "system":
+            msgs[0] = AIMessage(role="system", content=prompt)
+        else:
+            msgs.insert(0, AIMessage(role="system", content=prompt))
+        obs = (observation or "").strip()
+        obs_msg = AIMessage(
+            role="user",
+            content=obs if obs.startswith("Observation") else f"Observation:\n{obs}",
+        )
+        if msgs and msgs[-1].role == "user" and str(msgs[-1].content).startswith(
+            "Observation"
+        ):
+            msgs[-1] = obs_msg
+        else:
+            msgs.append(obs_msg)
+        return self._run_loop_from_messages(msgs, mode=run_mode)
+
     def _run_loop(
         self,
         task: str,
@@ -454,11 +557,41 @@ class ReActAgent:
         if history:
             messages.extend(history)
         messages.append(AIMessage(role="user", content=task))
+        return self._run_loop_from_messages(messages, mode=mode)
 
+    def _run_loop_from_messages(
+        self,
+        messages: list[AIMessage],
+        *,
+        mode: AgentMode,
+    ) -> ReActResult:
         steps: list[ReActStep] = []
+        self._ask_buffer.clear()
+        self._ask_seq = 0
+        self._live_messages = messages
         logger.notice(f"ReAct 开始任务，mode={mode.value}，max_steps={self.max_steps}")
 
+        try:
+            return self._run_loop_body(messages, mode=mode, steps=steps)
+        finally:
+            self._live_messages = None
+
+    def _run_loop_body(
+        self,
+        messages: list[AIMessage],
+        *,
+        mode: AgentMode,
+        steps: list[ReActStep],
+    ) -> ReActResult:
         for i in range(1, self.max_steps + 1):
+            self._emit_progress(
+                {
+                    "type": "status",
+                    "phase": "thinking",
+                    "step": i,
+                    "message": f"第 {i} 步：模型思考中…",
+                }
+            )
             try:
                 response = self.ai.chat(messages)
             except Exception as exc:  # noqa: BLE001
@@ -495,19 +628,63 @@ class ReActAgent:
             messages.append(AIMessage(role="assistant", content=raw))
 
             if parsed.final_answer is not None:
+                if self._ask_buffer:
+                    # 先一次性询问暂存问题；丢掉「把问卷写进 Final Answer」的脏消息
+                    messages[-1] = AIMessage(
+                        role="assistant",
+                        content=(
+                            f"Thought: {parsed.thought or '需要用户确认细节'}\n"
+                            "Action: ask_user\n"
+                            'Action Input: {"commit": true}\n'
+                        ),
+                    )
+                    flush = self._flush_ask_buffer()
+                    step.calls.append(
+                        ActionCall(
+                            action="ask_user",
+                            action_input='{"commit":true}',
+                            observation=flush.output
+                            if flush.ok
+                            else f"ERROR: {flush.output}",
+                            ok=flush.ok,
+                            data=dict(flush.data or {}),
+                        )
+                    )
+                    steps.append(step)
+                    self._emit_step(step)
+                    messages.append(
+                        AIMessage(
+                            role="user",
+                            content=(
+                                "Observation:\n"
+                                f"{flush.output if flush.ok else 'ERROR: ' + flush.output}\n\n"
+                                "用户已确认全部暂存问题。请根据选择输出最终 Plan 与 Final Answer。"
+                                "Final Answer 只写简短摘要，禁止再粘贴选项表、请用户回复选择、或 Plan JSON。"
+                            ),
+                        )
+                    )
+                    continue
+
                 plan = None
+                answer = parsed.final_answer
                 if mode is AgentMode.PLAN:
                     plan = parse_plan(
                         raw,
                         thought=parsed.thought,
                         final_answer=parsed.final_answer,
                     )
+                    if plan is not None and plan.ok:
+                        answer = clean_plan_summary(
+                            plan.summary or answer, has_steps=True
+                        )
+                        plan.summary = answer
+                    # 无 skill= 计划时：仍按普通 Final Answer 展示，不转入 ask_user
                 steps.append(step)
                 self._emit_step(step)
                 logger.notice(f"ReAct 完成于第 {i} 步（mode={mode.value}）")
                 return self._finalize_result(
                     ReActResult(
-                        answer=parsed.final_answer,
+                        answer=answer,
                         steps=steps,
                         completed=True,
                         messages=messages,
@@ -517,6 +694,46 @@ class ReActAgent:
                 )
 
             if not parsed.actions:
+                # 有暂存问题却未输出标准 Final Answer/Action：先弹窗问用户，勿直接结束
+                if self._ask_buffer:
+                    logger.notice(
+                        f"第 {i} 步无标准 Action/Final Answer，但有暂存 ask_user，先请用户确认"
+                    )
+                    messages[-1] = AIMessage(
+                        role="assistant",
+                        content=(
+                            f"Thought: {parsed.thought or '问题已收集完毕，请用户确认'}\n"
+                            "Action: ask_user\n"
+                            'Action Input: {"commit": true}\n'
+                        ),
+                    )
+                    flush = self._flush_ask_buffer()
+                    step.calls.append(
+                        ActionCall(
+                            action="ask_user",
+                            action_input='{"commit":true}',
+                            observation=flush.output
+                            if flush.ok
+                            else f"ERROR: {flush.output}",
+                            ok=flush.ok,
+                            data=dict(flush.data or {}),
+                        )
+                    )
+                    steps.append(step)
+                    self._emit_step(step)
+                    messages.append(
+                        AIMessage(
+                            role="user",
+                            content=(
+                                "Observation:\n"
+                                f"{flush.output if flush.ok else 'ERROR: ' + flush.output}\n\n"
+                                "用户已确认全部暂存问题。请根据选择输出最终 Plan 与 Final Answer。"
+                                "Final Answer 只写简短摘要，禁止再粘贴选项表。"
+                            ),
+                        )
+                    )
+                    continue
+
                 logger.warning(f"第 {i} 步未解析到 Action/Final Answer，结束循环")
                 fallback = parsed.thought or raw
                 step.final_answer = fallback
@@ -536,7 +753,35 @@ class ReActAgent:
                     )
                 )
 
+            action_names = [item.action for item in parsed.actions]
+            self._emit_progress(
+                {
+                    "type": "status",
+                    "phase": "acting",
+                    "step": i,
+                    "actions": action_names,
+                    "message": f"第 {i} 步：执行 {', '.join(action_names)}…",
+                }
+            )
             for item in parsed.actions:
+                # 遇到其它工具前，先把暂存的 ask_user 一次性问完
+                if item.action != "ask_user" and self._ask_buffer:
+                    flush = self._flush_ask_buffer()
+                    step.calls.append(
+                        ActionCall(
+                            action="ask_user",
+                            action_input='{"commit":true}',
+                            observation=flush.output
+                            if flush.ok
+                            else f"ERROR: {flush.output}",
+                            ok=flush.ok,
+                            data=dict(flush.data or {}),
+                        )
+                    )
+                    logger.notice(
+                        f"ReAct 第 {i} 步先提交暂存 ask_user ok={flush.ok}"
+                    )
+
                 skill_result = self._execute_action(mode, item.action, item.action_input)
                 observation = (
                     skill_result.output if skill_result.ok else f"ERROR: {skill_result.output}"
@@ -547,6 +792,7 @@ class ReActAgent:
                         action_input=item.action_input,
                         observation=observation,
                         ok=skill_result.ok,
+                        data=dict(skill_result.data or {}),
                     )
                 )
                 logger.notice(
@@ -561,6 +807,40 @@ class ReActAgent:
             messages.append(AIMessage(role="user", content=f"{prefix}:\n{observation_text}"))
 
         logger.warning("ReAct 达到最大步数仍未结束")
+        # 避免步数用尽时暂存问题永远不弹出
+        if self._ask_buffer:
+            flush = self._flush_ask_buffer()
+            steps.append(
+                ReActStep(
+                    index=len(steps) + 1,
+                    thought="达到最大步数，先请用户确认暂存问题",
+                    calls=[
+                        ActionCall(
+                            action="ask_user",
+                            action_input='{"commit":true}',
+                            observation=flush.output
+                            if flush.ok
+                            else f"ERROR: {flush.output}",
+                            ok=flush.ok,
+                            data=dict(flush.data or {}),
+                        )
+                    ],
+                )
+            )
+            self._emit_step(steps[-1])
+            return self._finalize_result(
+                ReActResult(
+                    answer=(
+                        flush.output
+                        if flush.ok
+                        else "达到最大步数，且确认问题失败"
+                    ),
+                    steps=steps,
+                    completed=False,
+                    messages=messages,
+                    mode=mode.value,
+                )
+            )
         return self._finalize_result(
             ReActResult(
                 answer="达到最大步数仍未得到 Final Answer",
@@ -571,7 +851,65 @@ class ReActAgent:
             )
         )
 
+    def _emit_progress(self, event: dict[str, Any]) -> None:
+        if self.on_progress is None:
+            return
+        try:
+            self.on_progress(event)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"on_progress 回调失败: {exc}")
+
+    def _step_progress_payload(self, step: ReActStep) -> dict[str, Any]:
+        level = self.detail if self.detail != DETAIL_OFF else "summary"
+        max_chars = self.detail_max_chars
+        actions: list[dict[str, Any]] = []
+        changes: list[dict[str, Any]] = []
+        for call in step.calls:
+            item: dict[str, Any] = {
+                "action": call.action,
+                "ok": call.ok,
+            }
+            # 解析 local_file 的子操作名，便于 UI 显示 write/patch
+            try:
+                payload = json.loads(call.action_input or "")
+                if isinstance(payload, dict) and payload.get("action"):
+                    item["op"] = str(payload.get("action"))
+                    if payload.get("path"):
+                        item["path"] = str(payload.get("path")).replace("\\", "/")
+            except (TypeError, json.JSONDecodeError):
+                pass
+            inp = (call.action_input or "").strip()
+            if inp:
+                item["input"] = inp if len(inp) <= 240 else inp[:239] + "…"
+            obs = (call.observation or "").strip()
+            if obs:
+                item["observation"] = (
+                    obs if len(obs) <= max_chars else obs[: max_chars - 1] + "…"
+                )
+            change = extract_change_from_call(
+                skill_name=call.action,
+                action_input=call.action_input,
+                data=call.data,
+                ok=call.ok,
+            )
+            if change:
+                item["change"] = change
+                changes.append(change)
+            actions.append(item)
+        return {
+            "type": "step",
+            "index": step.index,
+            "thought": (step.thought or "").strip(),
+            "actions": actions,
+            "changes": merge_changes_by_path(changes, max_chars=max_chars),
+            "final_answer": step.final_answer,
+            "text": format_step_detail(step, level, max_chars=max_chars),
+        }
+
     def _emit_step(self, step: ReActStep) -> None:
+        # 结构化进度始终推送（与 detail 开关无关），供 Web/CLI 实时展示
+        self._emit_progress(self._step_progress_payload(step))
+
         if self.detail == DETAIL_OFF:
             return
         text = format_step_detail(
@@ -610,9 +948,84 @@ class ReActAgent:
             logger.warning(reason)
             return SkillResult(ok=False, output=reason)
 
+        if skill_name == "ask_user":
+            return self._buffer_ask_user(action_input)
+
         return self.skills.run(
             skill_name,
             action_input,
+            permission=self.permission,
+        )
+
+    def _parse_action_input(self, action_input: str | None) -> dict[str, Any]:
+        if not action_input or not str(action_input).strip():
+            return {}
+        try:
+            data = json.loads(action_input)
+            return data if isinstance(data, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+
+    def _buffer_ask_user(self, action_input: str | None) -> SkillResult:
+        """暂存问题，不立即弹 UI；等 commit / Final Answer / 其它工具前再一次性询问。"""
+        args = self._parse_action_input(action_input)
+        if args.get("commit") or args.get("flush"):
+            return self._flush_ask_buffer()
+
+        items = coerce_questions(args)
+        if not items:
+            return SkillResult(
+                ok=False,
+                output="ask_user 需要 question+options，或非空 questions 数组",
+            )
+
+        for item in items:
+            self._ask_seq += 1
+            buffered = dict(item)
+            buffered["id"] = str(self._ask_seq)
+            self._ask_buffer.append(buffered)
+
+        total = len(self._ask_buffer)
+        added = len(items)
+        logger.notice(f"ask_user 已暂存 {added} 题（合计 {total}）")
+        self._emit_progress(
+            {
+                "type": "status",
+                "phase": "ask_buffer",
+                "message": f"已收集 {total} 个待确认问题…",
+            }
+        )
+        return SkillResult(
+            ok=True,
+            output=(
+                f"已暂存 {added} 个问题（合计 {total} 个，尚未询问用户）。"
+                "请继续用 ask_user 补充其余待确认项；"
+                "全部收集完后必须输出以 `Final Answer:` 开头的简短说明"
+                "（可同时带 Plan: skill=... 步骤），"
+                "系统会立即请用户确认上述全部问题。"
+                "不要用不带 Final Answer: 前缀的纯文本结束。"
+            ),
+            data={"buffered": total, "added": added},
+        )
+
+    def _flush_ask_buffer(self) -> SkillResult:
+        if not self._ask_buffer:
+            return SkillResult(ok=True, output="没有待确认的暂存问题", data={"questions": []})
+
+        items = list(self._ask_buffer)
+        self._ask_buffer.clear()
+        logger.notice(f"ask_user 一次性提交 {len(items)} 题给用户")
+        self._emit_progress(
+            {
+                "type": "status",
+                "phase": "ask_user",
+                "message": f"等待你确认 {len(items)} 个问题…",
+            }
+        )
+        # 直接走 Skill，避免再次进入暂存逻辑
+        return self.skills.run(
+            "ask_user",
+            {"questions": items},
             permission=self.permission,
         )
 

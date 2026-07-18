@@ -94,6 +94,52 @@ def test_agent_streams_detail(tmp_path):
     assert any("Final Answer" in c for c in chunks)
 
 
+def test_agent_progress_even_when_detail_off(tmp_path):
+    class _AI(AIClient):
+        provider = "scripted"
+
+        def __init__(self) -> None:
+            self.n = 0
+
+        def chat(self, messages, options: ChatOptions | None = None) -> AIResponse:
+            self.n += 1
+            if self.n == 1:
+                return AIResponse(
+                    content=(
+                        "Thought: 列一下\n"
+                        "Action: local_file\n"
+                        'Action Input: {"action":"list","path":"."}\n'
+                    ),
+                    model="s",
+                    provider=self.provider,
+                )
+            return AIResponse(
+                content="Thought: 好了\nFinal Answer: ok\n",
+                model="s",
+                provider=self.provider,
+            )
+
+    events: list[dict] = []
+    reg = SkillRegistry(permission=PermissionGuard.allow_all())
+    reg.register(LocalFileSkill(root=tmp_path, allow_write=False))
+    agent = ReActAgent(
+        ai=_AI(),
+        skills=reg,
+        permission=PermissionGuard.allow_all(),
+        detail="off",
+        stream_detail=True,
+        on_progress=events.append,
+        max_steps=5,
+    )
+    result = agent.run("列出目录")
+    assert result.completed
+    assert any(e.get("type") == "status" and e.get("phase") == "thinking" for e in events)
+    assert any(e.get("type") == "status" and e.get("phase") == "acting" for e in events)
+    steps = [e for e in events if e.get("type") == "step"]
+    assert len(steps) >= 2
+    assert steps[0]["actions"][0]["action"] == "local_file"
+
+
 def test_agent_detail_off_silent(tmp_path):
     class _AI(AIClient):
         provider = "scripted"

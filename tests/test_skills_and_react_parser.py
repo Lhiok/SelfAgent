@@ -92,6 +92,19 @@ Final Answer: 这是答案
     assert parsed.actions == []
 
 
+def test_parse_react_strips_leaked_action_from_thought():
+    text = """Thought: 先确认方案
+Action Input: {"questions":[{"id":"1","question":"选哪个？"}]}
+Action: ask_user
+Action Input: {"questions":[{"id":"1","question":"选哪个？","options":["A","B"]}]}
+"""
+    parsed = parse_react_output(text)
+    assert parsed.action == "ask_user"
+    assert "Action Input" not in parsed.thought
+    assert "questions" not in parsed.thought
+    assert "先确认方案" in parsed.thought
+
+
 def test_react_agent_runs_multiple_actions(tmp_path):
     (tmp_path / "a.txt").write_text("AAA", encoding="utf-8")
     (tmp_path / "b.txt").write_text("BBB", encoding="utf-8")

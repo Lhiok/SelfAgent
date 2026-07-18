@@ -42,6 +42,21 @@ _ACTION_PAIR = re.compile(
 )
 
 
+_LEAKED_PROTOCOL = re.compile(
+    r"(?:^|\n)\s*(?:\*{0,2})Action(?:\s*Input)?\s*[:：].*\Z",
+    re.S | re.I,
+)
+
+
+def _clean_thought(thought: str) -> str:
+    """去掉误粘进 Thought 的 Action / Action Input 协议段。"""
+    text = (thought or "").strip()
+    if not text:
+        return ""
+    text = _LEAKED_PROTOCOL.sub("", text).strip()
+    return text
+
+
 def parse_react_output(text: str) -> ParsedReAct:
     result = ParsedReAct()
     if not text:
@@ -49,7 +64,7 @@ def parse_react_output(text: str) -> ParsedReAct:
 
     m_thought = _THOUGHT.search(text)
     if m_thought:
-        result.thought = m_thought.group(1).strip()
+        result.thought = _clean_thought(m_thought.group(1))
 
     m_final = _FINAL.search(text)
     if m_final:

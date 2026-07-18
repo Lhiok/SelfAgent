@@ -13,8 +13,10 @@ import config as cfg
 from ai import AIMessage
 from log import get_logger
 from react.agent import ReActAgent, ReActResult
+from react.changes import collect_changes_from_steps
 from react.mode import AgentMode
 from react.plan import Plan
+from skills.ask_user import collect_ask_answers_from_steps
 
 logger = get_logger("react.conversation")
 
@@ -34,6 +36,8 @@ class TurnRecord:
     completed: bool
     mode: str
     step_count: int = 0
+    changes: list[dict[str, Any]] = field(default_factory=list)
+    ask_answers: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -121,6 +125,35 @@ class Conversation:
             self.save()
         return result
 
+    def resume_after_ask(
+        self,
+        *,
+        messages: list[AIMessage],
+        observation: str,
+        mode: str | AgentMode | None = None,
+        user_task: str = "",
+    ) -> ReActResult:
+        """重启后根据检查点消息与用户回答继续本轮 ReAct。"""
+        run_mode = AgentMode.parse(mode) if mode is not None else self.agent.mode
+        agent = self.agent.with_mode(run_mode)
+        task = (user_task or "").strip() or "（续跑：用户已确认）"
+        turn_no = self.turn_count + 1
+        self._log_turn_separator(
+            turn_no,
+            mode=agent.mode.value,
+            user=task,
+            kind="resume_ask",
+        )
+        result = agent.continue_from_messages(
+            messages,
+            observation=observation,
+            mode=agent.mode,
+        )
+        self._ingest_result(user_input=task, result=result)
+        if self.persist_dir is not None:
+            self.save()
+        return result
+
     def confirm_plan(
         self,
         plan: Plan | None = None,
@@ -162,6 +195,8 @@ class Conversation:
                 completed=result.completed,
                 mode=AgentMode.AGENT.value,
                 step_count=len(result.steps),
+                changes=collect_changes_from_steps(result.steps),
+                ask_answers=collect_ask_answers_from_steps(result.steps),
             )
         )
         if result.completed:
@@ -223,6 +258,8 @@ class Conversation:
                     "completed": t.completed,
                     "mode": t.mode,
                     "step_count": t.step_count,
+                    "changes": list(t.changes or []),
+                    "ask_answers": list(t.ask_answers or []),
                 }
                 for t in self.turns
             ],
@@ -365,6 +402,16 @@ class Conversation:
                 completed=bool(t.get("completed")),
                 mode=str(t.get("mode") or AgentMode.AGENT.value),
                 step_count=int(t.get("step_count") or 0),
+                changes=[
+                    dict(c)
+                    for c in (t.get("changes") or [])
+                    if isinstance(c, dict)
+                ],
+                ask_answers=[
+                    dict(a)
+                    for a in (t.get("ask_answers") or [])
+                    if isinstance(a, dict)
+                ],
             )
             for i, t in enumerate(data.get("turns") or [], start=1)
         ]
@@ -452,6 +499,8 @@ class Conversation:
                 completed=result.completed,
                 mode=result.mode,
                 step_count=len(result.steps),
+                changes=collect_changes_from_steps(result.steps),
+                ask_answers=collect_ask_answers_from_steps(result.steps),
             )
         )
 

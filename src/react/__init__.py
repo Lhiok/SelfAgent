@@ -1,4 +1,10 @@
 ﻿from react.agent import ActionCall, PlanResult, ReActAgent, ReActResult, ReActStep
+from react.changes import (
+    build_unified_diff,
+    collect_changes_from_steps,
+    extract_change_from_call,
+    merge_changes_by_path,
+)
 from react.conversation import (
     DEFAULT_PERSIST_DIR,
     Conversation,
@@ -37,6 +43,10 @@ __all__ = [
     "ReActResult",
     "ReActStep",
     "TurnRecord",
+    "build_unified_diff",
+    "collect_changes_from_steps",
+    "extract_change_from_call",
+    "merge_changes_by_path",
     "format_result_detail",
     "format_step_detail",
     "parse_detail_level",

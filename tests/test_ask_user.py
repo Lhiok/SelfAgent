@@ -36,6 +36,25 @@ def test_ask_user_custom_and_default():
     assert json.loads(result2.output)["selected"] == ["我自己的方案"]
 
 
+def test_ask_user_batch_questions():
+    skill = AskUserSkill(
+        ask_handler=lambda q, opts, meta: json.dumps(
+            [{"id": "1", "raw": "2"}, {"id": "2", "raw": "1"}],
+            ensure_ascii=False,
+        )
+    )
+    result = skill.run(
+        questions=[
+            {"question": "缓存？", "options": ["内存", "Redis"]},
+            {"question": "日志？", "options": ["info", "debug"]},
+        ]
+    )
+    assert result.ok
+    data = json.loads(result.output)
+    assert data["selected"] == [["Redis"], ["info"]]
+    assert len(data["questions"]) == 2
+
+
 def test_plan_mode_allows_ask_user():
     class _AI(AIClient):
         provider = "scripted"

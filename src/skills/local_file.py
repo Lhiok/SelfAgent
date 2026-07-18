@@ -154,15 +154,33 @@ class LocalFileSkill(Skill):
             return SkillResult(ok=False, output="当前配置禁止写入")
         if content is None:
             return SkillResult(ok=False, output="write 需要 content")
+        rel = str(target.relative_to(self.root)).replace("\\", "/")
+        existed = target.is_file()
+        old_text = ""
+        if existed:
+            try:
+                old_text = target.read_text(encoding=encoding)
+            except OSError:
+                old_text = ""
+        new_text = str(content)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(str(content), encoding=encoding)
+        target.write_text(new_text, encoding=encoding)
         logger.notice(f"已写入文件: {target}")
+        kind = "overwrite" if existed else "write"
         return SkillResult(
             ok=True,
             output=(
-                f"已写入 {str(target.relative_to(self.root)).replace(chr(92), '/')}"
-                f"，字节数约 {len(str(content).encode(encoding))}"
+                f"已写入 {rel}"
+                f"，字节数约 {len(new_text.encode(encoding))}"
             ),
+            data={
+                "change": {
+                    "kind": kind,
+                    "path": rel,
+                    "old_text": old_text,
+                    "new_text": new_text,
+                }
+            },
         )
 
     def _patch(self, target: Path, old_text: Any, new_text: Any, encoding: str) -> SkillResult:
@@ -184,10 +202,24 @@ class LocalFileSkill(Skill):
                 ok=False,
                 output=f"old_text 匹配到 {count} 处，请提供更唯一的片段",
             )
-        target.write_text(original.replace(old, new, 1), encoding=encoding)
+        updated = original.replace(old, new, 1)
+        target.write_text(updated, encoding=encoding)
         logger.notice(f"已 patch 文件: {target}")
         rel = str(target.relative_to(self.root)).replace("\\", "/")
-        return SkillResult(ok=True, output=f"已更新 {rel}")
+        return SkillResult(
+            ok=True,
+            output=f"已更新 {rel}",
+            data={
+                "change": {
+                    "kind": "patch",
+                    "path": rel,
+                    "old_text": original,
+                    "new_text": updated,
+                    "fragment_old": old,
+                    "fragment_new": new,
+                }
+            },
+        )
 
     def _move(self, source: Path, dest: Any, *, overwrite: bool = False) -> SkillResult:
         if not self.allow_write:
@@ -229,5 +261,15 @@ class LocalFileSkill(Skill):
         return SkillResult(
             ok=True,
             output=f"已移动 {src_rel} -> {dst_rel}",
-            data={"from": src_rel, "to": dst_rel},
+            data={
+                "from": src_rel,
+                "to": dst_rel,
+                "change": {
+                    "kind": "move",
+                    "path": src_rel,
+                    "dest": dst_rel,
+                    "old_text": "",
+                    "new_text": "",
+                },
+            },
         )
