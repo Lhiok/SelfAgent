@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "selfagent"
 version = "0.1.0"
-description = "SelfAgent 通用智能体基础框架：环境、日志、飞书、AI、ReAct、Skill、权限、回归"
+description = "SelfAgent CLI????????????????"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -28,6 +28,7 @@ all = [
 
 [project.scripts]
 selfagent-regression = "regression.__main__:main"
+selfagent-cli = "cli.__main__:main"
 
 [tool.setuptools]
 py-modules = ["config"]

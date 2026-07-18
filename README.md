@@ -1,62 +1,19 @@
-﻿# SelfAgent
+# SelfAgent（cli 分支）
 
-SelfAgent：面向各类项目的 Python 智能体基础框架，按层解耦：
+本分支提供**命令行 CLI**；通用核心与 `main` 对齐。其它端：`web`（浏览器工作台）、`app`（Windows 桌面）。
 
-| 层级 | 能力 |
-|------|------|
-| 环境层 | 按「配置 / 用户环境变量 / 系统环境变量 / 进程环境」查找（可选回退） |
-| 日志层 | 提醒 / 警告 / 严重；控制台、本地文件、服务器上报；可选每次问答独立日志 |
-| 飞书层 | 自定义机器人 Webhook 推送（文本 / Markdown 卡片 / 富文本） |
-| AI 层 | 统一客户端接口，按配置选择模型；当前实现 DeepSeek |
-| ReAct 层 | Thought → Action → Observation；Plan Mode；连续对话 |
-| Skill 层 | 可插拔工具；本地文件、搜索、命令、飞书、Git、用户确认、能力需求提交等 |
-| 权限层 | 按角色限制 ReAct 可调用的 Skill / action |
-| 回归层 | 一键验证各模块功能（离线默认，可选在线） |
-
-## 安装
+## 使用
 
 ```bash
-cd SelfAgent
-python -m venv .venv
-.venv\Scripts\activate
 pip install -e ".[dev,skills]"
-playwright install chromium
-copy config.example.yaml config.yaml
+selfagent-cli
+# 或
+python -m cli --workdir D:\my-project
 ```
 
-可选 extra：`dev`（pytest）、`skills`（截屏 mss/Pillow + 浏览器 Playwright）。也可一次装全：`pip install -e ".[all]"`。
+常用参数：`--workdir` / `--resume` / `--list-sessions`。交互内命令见启动提示（`/plan` `/agent` `/confirm` 等）。
 
-本仓库按产品线分分支：
-
-| 分支 | 用途 |
-|------|------|
-| `main` | 通用核心（当前） |
-| `web` | 浏览器工作台 |
-| `cli` | 命令行交互 |
-| `app` | Windows 独立窗口应用 |
-
-在对应模块节中配置（比集中写在 `env` 更易维护）：
-
-```yaml
-ai:
-  deepseek:
-    api_key: "sk-xxx"
-    base_url: "https://api.deepseek.com"
-    model: "deepseek-chat"
-    timeout: 180.0   # 读超时秒数；慢响应可再加大，或写 {connect: 10, read: 300}
-    retries: 1       # 超时/网络错误额外重试次数
-
-feishu:
-  webhook_url: "https://open.feishu.cn/open-apis/bot/v2/hook/xxx"
-```
-
-未填写时，仍可回退到同名系统/用户环境变量（如 `DEEPSEEK_API_KEY`）。
-
-## 端侧入口（其它分支）
-
-- **浏览器工作台**：`git checkout web` 后见该分支 README（`pip install -e ".[ui]"` → `python -m web`）
-- **命令行 CLI**：`git checkout cli` 后使用 `selfagent-cli` / `python -m cli`
-- **Windows 桌面应用**：`git checkout app` 后使用 `selfagent-app` / `python -m app`
+---
 
 ## 快速使用
 
