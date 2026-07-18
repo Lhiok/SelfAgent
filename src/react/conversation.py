@@ -165,6 +165,10 @@ class Conversation:
     def set_mode(self, mode: str | AgentMode) -> None:
         self.agent = self.agent.with_mode(mode)
 
+    def set_detail(self, level: str) -> None:
+        """切换过程细节级别：off / summary / full。"""
+        self.agent.set_detail(level)
+
     def state(self) -> ConversationState:
         return ConversationState(
             session_id=self.session_id,

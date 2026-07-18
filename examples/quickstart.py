@@ -47,7 +47,10 @@ def main() -> None:
         max_steps=8,
     )
     result = agent.run("列出当前项目根目录下的文件，并简要说明这是什么项目。")
-    log.notice(f"ReAct completed={result.completed}")
+    log.notice(f"ReAct completed={result.completed} detail={result.detail_level}")
+    # 未开 stream_detail 时，结束后仍可打印 result.detail_text / result.format_detail()
+    if result.detail_text and not agent.stream_detail:
+        print("\n" + result.detail_text)
     print("\n===== Final Answer =====\n")
     print(result.answer)
 

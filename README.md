@@ -67,6 +67,8 @@ print(client.ask("用一句话介绍你自己"))
 agent = ReActAgent(skills=SkillRegistry.from_config(), role="readonly")
 result = agent.run("查看当前目录有哪些文件")
 print(result.answer)
+# 打开细节后可看每轮 Thought/Action/Observation：
+# print(result.detail_text) 或 result.format_detail("full")
 ```
 
 运行示例：
@@ -74,6 +76,34 @@ print(result.answer)
 ```bash
 python examples/quickstart.py
 ```
+
+## 过程细节开关
+
+默认只输出最终答案（盲盒）。在 `config.yaml` → `react` 打开过程细节：
+
+| `detail` | 效果 |
+|----------|------|
+| `off` | 仅 Final Answer（默认） |
+| `summary` | 每轮 Thought + Action（含简短 Input） |
+| `full` | 另含完整 Action Input / Observation |
+
+```yaml
+react:
+  detail: summary          # off | summary | full
+  stream_detail: true      # 每轮执行中实时打印
+  detail_max_chars: 2000   # 单段截断，防刷屏
+```
+
+也可代码或会话内切换：
+
+```python
+agent = ReActAgent(detail="full")          # 构造时
+agent.set_detail("summary")                # 运行时
+conv.set_detail("full")                    # Conversation
+# chat_session 示例支持命令: /detail off|summary|full
+```
+
+`stream_detail: true` 时边跑边打印；为 `false` 时可在结束后读 `result.detail_text`。
 
 ## 目录结构
 

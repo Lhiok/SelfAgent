@@ -30,6 +30,12 @@ react:
   # 默认模式：agent（直接执行）| plan（先规划）
   mode: agent
   max_steps: 12
+  # 过程细节：off（仅最终答案）| summary（Thought+Action）| full（含 Input/Observation）
+  detail: off
+  # detail != off 时是否在每轮执行中实时打印
+  stream_detail: true
+  # 单段细节最大字符数（防刷屏）
+  detail_max_chars: 2000
   conversation:
     # 连续对话保留的最大消息条数（不含 system）
     max_history_messages: 40

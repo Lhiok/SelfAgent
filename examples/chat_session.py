@@ -22,7 +22,8 @@ def main() -> None:
         mode=AgentMode.AGENT,
     )
     conv = Conversation(agent)
-    print("连续对话已启动。命令: /plan /agent /confirm /reset /quit")
+    print("连续对话已启动。命令: /plan /agent /confirm /detail /reset /quit")
+    print(f"当前细节级别: {agent.detail}（可用 /detail off|summary|full）")
     while True:
         try:
             text = input("\n你> ").strip()
@@ -45,16 +46,36 @@ def main() -> None:
             conv.set_mode(AgentMode.AGENT)
             print("已切换 Agent Mode")
             continue
+        if text == "/detail" or text.startswith("/detail "):
+            parts = text.split(maxsplit=1)
+            if len(parts) == 1:
+                print(f"当前细节级别: {conv.agent.detail}")
+                print("用法: /detail off|summary|full")
+                continue
+            try:
+                conv.set_detail(parts[1])
+            except ValueError as exc:
+                print(exc)
+                continue
+            print(f"已切换细节级别: {conv.agent.detail}")
+            continue
         if text == "/confirm":
             result = conv.confirm_plan()
-            print(f"助手> {result.answer}")
+            _print_result(result, streamed=conv.agent.stream_detail)
             continue
 
         result = conv.chat(text)
-        print(f"助手> {result.answer}")
+        _print_result(result, streamed=conv.agent.stream_detail)
         if result.plan and result.plan.ok:
             print("--- 待确认计划 ---")
             print(result.plan.format_text())
+
+
+def _print_result(result, *, streamed: bool) -> None:
+    # 未实时流式输出时，结束后补打细节
+    if result.detail_text and not streamed:
+        print(result.detail_text)
+    print(f"助手> {result.answer}")
 
 
 if __name__ == "__main__":

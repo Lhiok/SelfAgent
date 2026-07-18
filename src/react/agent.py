@@ -4,18 +4,26 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 import config as cfg
 from ai import AIClient, AIMessage, create_ai_client
 from log import get_logger
 from permission import PermissionGuard
+from react.detail import (
+    DETAIL_OFF,
+    format_result_detail,
+    format_step_detail,
+    parse_detail_level,
+)
 from react.mode import AgentMode
 from react.parser import parse_react_output
 from react.plan import PLAN_SYSTEM_PROMPT, Plan, parse_plan
 from skills import SkillRegistry, SkillResult
 
 logger = get_logger("react")
+
+DetailHandler = Callable[[str], None]
 
 DEFAULT_SYSTEM_PROMPT = """你是一个可调用工具的助手。请严格使用 ReAct 格式回复：
 Thought: 思考下一步
@@ -71,6 +79,21 @@ class ReActResult:
     messages: list[AIMessage] = field(default_factory=list)
     mode: str = AgentMode.AGENT.value
     plan: Plan | None = None
+    # 当 react.detail != off 时填充，便于调用方直接展示
+    detail_text: str = ""
+    detail_level: str = DETAIL_OFF
+
+    def format_detail(
+        self,
+        level: str | None = None,
+        *,
+        max_chars: int = 2000,
+    ) -> str:
+        """按级别格式化过程细节（默认用本次运行的 detail_level）。"""
+        use = level if level is not None else (
+            self.detail_level if self.detail_level != DETAIL_OFF else "full"
+        )
+        return format_result_detail(self, use, max_chars=max_chars)
 
 
 @dataclass
@@ -82,6 +105,8 @@ class PlanResult:
     steps: list[ReActStep] = field(default_factory=list)
     completed: bool = False
     messages: list[AIMessage] = field(default_factory=list)
+    detail_text: str = ""
+    detail_level: str = DETAIL_OFF
 
     def to_react_result(self) -> ReActResult:
         return ReActResult(
@@ -91,6 +116,8 @@ class PlanResult:
             messages=self.messages,
             mode=AgentMode.PLAN.value,
             plan=self.plan,
+            detail_text=self.detail_text,
+            detail_level=self.detail_level,
         )
 
 
@@ -122,6 +149,10 @@ class ReActAgent:
         allow_readonly_in_plan: bool | None = None,
         readonly_actions: dict[str, list[str]] | None = None,
         plan_allow_skills: list[str] | None = None,
+        detail: str | None = None,
+        stream_detail: bool | None = None,
+        detail_max_chars: int | None = None,
+        on_detail: DetailHandler | None = None,
     ) -> None:
         react_cfg = cfg.get_section("react", {}) or {}
         plan_cfg = react_cfg.get("plan") or {}
@@ -176,6 +207,21 @@ class ReActAgent:
         )
         self.plan_allow_skills = {str(s).strip() for s in raw_allow if str(s).strip()}
 
+        self.detail = parse_detail_level(
+            detail if detail is not None else react_cfg.get("detail", DETAIL_OFF)
+        )
+        self.stream_detail = (
+            stream_detail
+            if stream_detail is not None
+            else bool(react_cfg.get("stream_detail", True))
+        )
+        self.detail_max_chars = (
+            detail_max_chars
+            if detail_max_chars is not None
+            else int(react_cfg.get("detail_max_chars", 2000))
+        )
+        self.on_detail = on_detail
+
         base_prompt = system_prompt or react_cfg.get("system_prompt") or DEFAULT_SYSTEM_PROMPT
         if self.mode is AgentMode.PLAN:
             base_prompt = f"{base_prompt.strip()}\n\n{PLAN_SYSTEM_PROMPT.strip()}"
@@ -186,6 +232,10 @@ class ReActAgent:
             f"当前权限角色: {self.permission.role}\n"
             f"可用工具:\n{self.skills.list_schemas(self.permission)}"
         )
+
+    def set_detail(self, level: str) -> None:
+        """运行时切换细节级别：off / summary / full。"""
+        self.detail = parse_detail_level(level)
 
     def with_mode(self, mode: str | AgentMode) -> "ReActAgent":
         """切换模式（返回新实例，复用 ai/skills/permission）。"""
@@ -198,6 +248,10 @@ class ReActAgent:
             allow_readonly_in_plan=self.allow_readonly_in_plan,
             readonly_actions={k: sorted(v) for k, v in self.readonly_actions.items()},
             plan_allow_skills=sorted(self.plan_allow_skills),
+            detail=self.detail,
+            stream_detail=self.stream_detail,
+            detail_max_chars=self.detail_max_chars,
+            on_detail=self.on_detail,
             system_prompt=None,
         )
 
@@ -222,6 +276,8 @@ class ReActAgent:
             steps=result.steps,
             completed=result.completed,
             messages=result.messages,
+            detail_text=result.detail_text,
+            detail_level=result.detail_level,
         )
 
     def execute_plan(
@@ -233,11 +289,13 @@ class ReActAgent:
     ) -> ReActResult:
         """按已批准的计划逐步执行 Skill（走权限校验）。"""
         if not plan.steps:
-            return ReActResult(
-                answer="计划为空，无可执行步骤",
-                completed=False,
-                mode=AgentMode.AGENT.value,
-                plan=plan,
+            return self._finalize_result(
+                ReActResult(
+                    answer="计划为空，无可执行步骤",
+                    completed=False,
+                    mode=AgentMode.AGENT.value,
+                    plan=plan,
+                )
             )
 
         logger.notice(f"开始执行计划，共 {len(plan.steps)} 步")
@@ -270,6 +328,7 @@ class ReActAgent:
                 )
             )
             steps.append(react_step)
+            self._emit_step(react_step)
             observations.append(
                 f"[{plan_step.index}] {plan_step.skill}: {observation}"
             )
@@ -280,23 +339,27 @@ class ReActAgent:
                 answer = (
                     f"计划执行中断于第 {plan_step.index} 步: {skill_result.output}"
                 )
-                return ReActResult(
-                    answer=answer,
-                    steps=steps,
-                    completed=False,
-                    messages=messages,
-                    mode=AgentMode.AGENT.value,
-                    plan=plan,
+                return self._finalize_result(
+                    ReActResult(
+                        answer=answer,
+                        steps=steps,
+                        completed=False,
+                        messages=messages,
+                        mode=AgentMode.AGENT.value,
+                        plan=plan,
+                    )
                 )
 
         answer = "计划执行完成\n" + "\n".join(observations)
-        return ReActResult(
-            answer=answer,
-            steps=steps,
-            completed=True,
-            messages=messages,
-            mode=AgentMode.AGENT.value,
-            plan=plan,
+        return self._finalize_result(
+            ReActResult(
+                answer=answer,
+                steps=steps,
+                completed=True,
+                messages=messages,
+                mode=AgentMode.AGENT.value,
+                plan=plan,
+            )
         )
 
     def run_dict(self, task: str, **kwargs: Any) -> dict[str, Any]:
@@ -390,14 +453,17 @@ class ReActAgent:
                         final_answer=parsed.final_answer,
                     )
                 steps.append(step)
+                self._emit_step(step)
                 logger.notice(f"ReAct 完成于第 {i} 步（mode={mode.value}）")
-                return ReActResult(
-                    answer=parsed.final_answer,
-                    steps=steps,
-                    completed=True,
-                    messages=messages,
-                    mode=mode.value,
-                    plan=plan,
+                return self._finalize_result(
+                    ReActResult(
+                        answer=parsed.final_answer,
+                        steps=steps,
+                        completed=True,
+                        messages=messages,
+                        mode=mode.value,
+                        plan=plan,
+                    )
                 )
 
             if not parsed.actions:
@@ -408,13 +474,16 @@ class ReActAgent:
                 if mode is AgentMode.PLAN:
                     plan = parse_plan(raw, thought=parsed.thought, final_answer=fallback)
                 steps.append(step)
-                return ReActResult(
-                    answer=fallback,
-                    steps=steps,
-                    completed=False,
-                    messages=messages,
-                    mode=mode.value,
-                    plan=plan,
+                self._emit_step(step)
+                return self._finalize_result(
+                    ReActResult(
+                        answer=fallback,
+                        steps=steps,
+                        completed=False,
+                        messages=messages,
+                        mode=mode.value,
+                        plan=plan,
+                    )
                 )
 
             for item in parsed.actions:
@@ -437,17 +506,41 @@ class ReActAgent:
 
             observation_text = _format_observations(step.calls)
             steps.append(step)
+            self._emit_step(step)
             prefix = "Observations" if len(step.calls) > 1 else "Observation"
             messages.append(AIMessage(role="user", content=f"{prefix}:\n{observation_text}"))
 
         logger.warning("ReAct 达到最大步数仍未结束")
-        return ReActResult(
-            answer="达到最大步数仍未得到 Final Answer",
-            steps=steps,
-            completed=False,
-            messages=messages,
-            mode=mode.value,
+        return self._finalize_result(
+            ReActResult(
+                answer="达到最大步数仍未得到 Final Answer",
+                steps=steps,
+                completed=False,
+                messages=messages,
+                mode=mode.value,
+            )
         )
+
+    def _emit_step(self, step: ReActStep) -> None:
+        if self.detail == DETAIL_OFF or not self.stream_detail:
+            return
+        text = format_step_detail(
+            step, self.detail, max_chars=self.detail_max_chars
+        )
+        if not text:
+            return
+        if self.on_detail is not None:
+            self.on_detail(text)
+        else:
+            print(text, flush=True)
+
+    def _finalize_result(self, result: ReActResult) -> ReActResult:
+        result.detail_level = self.detail
+        if self.detail != DETAIL_OFF:
+            result.detail_text = format_result_detail(
+                result, self.detail, max_chars=self.detail_max_chars
+            )
+        return result
 
     def _execute_action(
         self,
