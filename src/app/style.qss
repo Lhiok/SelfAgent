@@ -402,18 +402,19 @@ QFrame#ModePopup {
 QFrame#ModePopupPanel {
     background: #2A2A2A;
     border: 1px solid #3C3C3C;
-    border-radius: 14px;
+    border-radius: 12px;
 }
 
 QPushButton#ModePopupItem {
     background: transparent;
     border: none;
-    border-radius: 10px;
-    padding: 6px 10px;
+    border-radius: 8px;
+    padding: 2px 8px;
     color: #F0F0F0;
-    font-size: 12px;
+    font-size: 11px;
     text-align: left;
-    min-height: 26px;
+    min-height: 20px;
+    max-height: 22px;
 }
 
 QPushButton#ModePopupItem:hover {

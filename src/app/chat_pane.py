@@ -43,8 +43,8 @@ class ModePopup(QFrame):
         panel = QFrame()
         panel.setObjectName("ModePopupPanel")
         col = QVBoxLayout(panel)
-        col.setContentsMargins(4, 4, 4, 4)
-        col.setSpacing(2)
+        col.setContentsMargins(3, 3, 3, 3)
+        col.setSpacing(1)
 
         self.btn_agent = QPushButton("∞  Agent")
         self.btn_plan = QPushButton("☰  Plan")
