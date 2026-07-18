@@ -32,6 +32,9 @@ config.yml
 logs/
 sessions/
 
+# Agent-filed capability requests (skills.request_capability.output_dir)
+requirements/
+
 # Test / type / lint caches
 .pytest_cache/
 .mypy_cache/

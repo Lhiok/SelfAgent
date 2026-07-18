@@ -13,6 +13,7 @@ from skills.base import Skill, SkillResult
 from skills.feishu_notify import FeishuNotifySkill
 from skills.git_ops import GitOpsSkill
 from skills.local_file import LocalFileSkill
+from skills.request_capability import RequestCapabilitySkill
 from skills.search_code import SearchCodeSkill
 from skills.shell_run import ShellRunSkill
 
@@ -126,6 +127,16 @@ class SkillRegistry:
         ask_cfg = section.get("ask_user") or {}
         if bool(ask_cfg.get("enabled", True)):
             registry.register(AskUserSkill())
+
+        rc_cfg = section.get("request_capability") or {}
+        if bool(rc_cfg.get("enabled", True)):
+            registry.register(
+                RequestCapabilitySkill(
+                    output_dir=rc_cfg.get("output_dir", "requirements"),
+                    notify_feishu=bool(rc_cfg.get("notify_feishu", True)),
+                    enabled=True,
+                )
+            )
 
         sc_cfg = section.get("search_code") or {}
         if bool(sc_cfg.get("enabled", True)):

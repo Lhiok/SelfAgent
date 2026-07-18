@@ -4,6 +4,7 @@ from skills.feishu_notify import FeishuNotifySkill
 from skills.git_ops import GitOpsSkill
 from skills.local_file import LocalFileSkill
 from skills.registry import SkillRegistry
+from skills.request_capability import RequestCapabilitySkill
 from skills.search_code import SearchCodeSkill
 from skills.shell_run import ShellRunSkill
 
@@ -12,6 +13,7 @@ __all__ = [
     "FeishuNotifySkill",
     "GitOpsSkill",
     "LocalFileSkill",
+    "RequestCapabilitySkill",
     "SearchCodeSkill",
     "ShellRunSkill",
     "Skill",

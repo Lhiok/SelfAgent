@@ -9,7 +9,7 @@ SelfAgent：面向各类项目的 Python 智能体基础框架，按层解耦：
 | 飞书层 | 自定义机器人 Webhook 推送（文本 / Markdown 卡片 / 富文本） |
 | AI 层 | 统一客户端接口，按配置选择模型；当前实现 DeepSeek |
 | ReAct 层 | Thought → Action → Observation；Plan Mode；连续对话 |
-| Skill 层 | 可插拔工具；当前实现本地文件查询与修改 |
+| Skill 层 | 可插拔工具；本地文件、搜索、命令、飞书、Git、用户确认、能力需求提交等 |
 | 权限层 | 按角色限制 ReAct 可调用的 Skill / action |
 | 回归层 | 一键验证各模块功能（离线默认，可选在线） |
 
@@ -193,6 +193,26 @@ print(result.output)  # JSON：selected / indexes / raw
 ```
 
 Plan Mode 下默认允许调用（`react.plan.allow_skills`），写入类操作仍被拦截。
+
+## Skill：request_capability
+
+当 Agent 认定现有 Skill 无法满足需求时，向用户提交能力需求（**不会立即实现**）：在本地目录写入 Markdown 需求文档，并可选飞书通知。提交后 Agent 应继续用现有 Skill 推进任务。
+
+配置见 `config.yaml` → `skills.request_capability`（`output_dir` / `notify_feishu`）。
+
+```json
+{
+  "title": "需要浏览器自动化",
+  "need": "打开网页并截图",
+  "why": "现有 shell_run / local_file 无法操控浏览器",
+  "context": "任务：验证登录页",
+  "workaround": "先输出手工步骤文档",
+  "priority": "high",
+  "notify": true
+}
+```
+
+Plan Mode 下默认允许调用（`react.plan.allow_skills`）。
 
 ## Skill：search_code
 

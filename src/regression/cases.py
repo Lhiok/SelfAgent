@@ -22,6 +22,7 @@ from skills import (
     FeishuNotifySkill,
     GitOpsSkill,
     LocalFileSkill,
+    RequestCapabilitySkill,
     SearchCodeSkill,
     ShellRunSkill,
     SkillRegistry,
@@ -164,6 +165,26 @@ def case_skill_ask_user_choice() -> None:
     _assert(result.ok, result.output)
     data = json.loads(result.output)
     _assert(data["selected"] == ["方案乙"], data)
+
+
+def case_skill_request_capability() -> None:
+    from unittest.mock import MagicMock
+
+    with tempfile.TemporaryDirectory() as tmp:
+        bot = MagicMock()
+        bot.send_markdown.return_value = MagicMock(ok=True, code=0, msg="ok", raw={})
+        skill = RequestCapabilitySkill(output_dir=Path(tmp) / "reqs", bot=bot)
+        result = skill.run(
+            title="需要浏览器",
+            need="打开页面",
+            why="现有 Skill 不足",
+            workaround="先手工验证",
+        )
+        _assert(result.ok, result.output)
+        data = json.loads(result.output)
+        _assert(Path(data["path"]).is_file(), data["path"])
+        _assert(data["notified"] is True, data)
+        _assert("继续用现有 Skill" in data["reminder"], data)
 
 
 def case_skill_search_code() -> None:
@@ -542,6 +563,7 @@ def build_cases(*, include_live: bool = False) -> list[tuple[str, str, CaseFn]]:
         ("skills", "local_file 读写改查", case_skill_local_file_crud),
         ("skills", "路径越界拦截", case_skill_path_escape_blocked),
         ("skills", "ask_user 方案选择", case_skill_ask_user_choice),
+        ("skills", "request_capability 提需求", case_skill_request_capability),
         ("skills", "search_code 检索", case_skill_search_code),
         ("skills", "shell_run 白名单", case_skill_shell_run_safe),
         ("skills", "feishu_notify 缺配置", case_skill_feishu_notify_missing_webhook),

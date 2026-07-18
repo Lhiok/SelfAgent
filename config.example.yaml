@@ -48,6 +48,7 @@ react:
     allow_skills:
       - ask_user
       - feishu_notify
+      - request_capability
   system_prompt: |
     你是一个可调用工具的助手。请严格使用 ReAct 格式回复：
     Thought: 思考下一步
@@ -68,6 +69,12 @@ skills:
   ask_user:
     # 向用户提问选型（Plan Mode 落地前确认）
     enabled: true
+  request_capability:
+    # 现有 Skill 不足时提交能力需求（落盘 + 飞书，不阻塞当前任务）
+    enabled: true
+    # 需求文档目录（相对 cwd 或绝对路径）
+    output_dir: requirements
+    notify_feishu: true
   search_code:
     enabled: true
     # root 默认沿用 local_file.root
@@ -100,6 +107,7 @@ permission:
         git_ops:
           actions: [status, diff, log, branch, show]
         ask_user: true
+        request_capability: true
         feishu_notify:
           actions: [text, markdown]
     editor:
@@ -111,6 +119,7 @@ permission:
         git_ops:
           actions: [status, diff, log, branch, show, add, commit]
         ask_user: true
+        request_capability: true
         shell_run:
           actions: [run]
         feishu_notify:
