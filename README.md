@@ -12,7 +12,13 @@ start.bat
 # 或: selfagent-app
 ```
 
-功能：选择工作目录、新建会话、发送任务、后台执行 Agent；`ask_user` 以对话框确认。
+原生 PySide6 工作台，功能对齐 `web` 浏览器端（不内嵌网页）：
+
+- 多工作区 / 多会话侧栏（收藏、归档、折叠、重命名）
+- Agent / Plan、细节级别、流式步骤与工具摘要
+- 待确认计划、文件 diff 检视、打开本地文件
+- 多题 `ask_user`、todo 进度条
+- 会话落盘：`logs/workspaces/`（与 web 共用格式，可互通）
 
 可选打包：
 
