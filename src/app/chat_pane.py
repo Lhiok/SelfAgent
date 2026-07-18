@@ -4,15 +4,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import Signal
-from PySide6.QtGui import QKeySequence, QShortcut, QTextCursor
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QAction, QKeySequence, QShortcut, QTextCursor
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
+    QMenu,
     QProgressBar,
     QPushButton,
     QTextBrowser,
     QTextEdit,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -27,6 +29,7 @@ class ChatPane(QWidget):
     change_clicked = Signal(dict)
     plan_inspect_requested = Signal(dict)
     detail_inspect_requested = Signal(str)
+    mode_changed = Signal(str)  # agent | plan
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -114,23 +117,47 @@ class ChatPane(QWidget):
 
         composer_box = QWidget()
         composer_box.setObjectName("ComposerBox")
-        composer = QHBoxLayout(composer_box)
-        composer.setContentsMargins(2, 2, 6, 2)
-        composer.setSpacing(6)
+        composer_col = QVBoxLayout(composer_box)
+        composer_col.setContentsMargins(12, 10, 12, 8)
+        composer_col.setSpacing(4)
+
         self.input = QTextEdit()
         self.input.setPlaceholderText("发送后续消息…")
-        self.input.setFixedHeight(56)
-        self.btn_send = QPushButton("发送")
-        self.btn_send.setObjectName("PrimaryButton")
-        self.btn_send.setMinimumWidth(72)
-        self.btn_send.clicked.connect(self._emit_send)
-        composer.addWidget(self.input, 1)
-        composer.addWidget(self.btn_send)
-        dock_l.addWidget(composer_box)
+        self.input.setFixedHeight(44)
+        composer_col.addWidget(self.input)
+
+        # 底栏：左模式胶囊 · 右发送（参照 Cursor Composer）
+        tools = QHBoxLayout()
+        tools.setContentsMargins(0, 2, 0, 0)
+        tools.setSpacing(8)
+
+        self._mode = "agent"
+        self.btn_mode = QToolButton()
+        self.btn_mode.setObjectName("ModePill")
+        self.btn_mode.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.btn_mode.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        mode_menu = QMenu(self.btn_mode)
+        act_agent = QAction("Agent", mode_menu)
+        act_plan = QAction("Plan", mode_menu)
+        act_agent.triggered.connect(lambda: self._emit_mode("agent"))
+        act_plan.triggered.connect(lambda: self._emit_mode("plan"))
+        mode_menu.addAction(act_agent)
+        mode_menu.addAction(act_plan)
+        self.btn_mode.setMenu(mode_menu)
+        self._paint_mode_pill()
+        tools.addWidget(self.btn_mode)
 
         self.status = QLabel("就绪")
         self.status.setObjectName("StatusLabel")
-        dock_l.addWidget(self.status)
+        tools.addWidget(self.status, 1)
+
+        self.btn_send = QPushButton("↑")
+        self.btn_send.setObjectName("SendCircle")
+        self.btn_send.setToolTip("发送（Ctrl+Enter）")
+        self.btn_send.clicked.connect(self._emit_send)
+        tools.addWidget(self.btn_send)
+        composer_col.addLayout(tools)
+        dock_l.addWidget(composer_box)
         layout.addWidget(dock)
 
         QShortcut(QKeySequence("Ctrl+Return"), self.input, self._emit_send)
@@ -144,12 +171,33 @@ class ChatPane(QWidget):
         self.btn_send.setEnabled(not busy)
         self.input.setEnabled(not busy)
         self.btn_confirm.setEnabled(not busy)
+        self.btn_mode.setEnabled(not busy)
+        if busy:
+            self.btn_send.setText("■")
+            self.btn_send.setToolTip("运行中…")
+        else:
+            self.btn_send.setText("↑")
+            self.btn_send.setToolTip("发送（Ctrl+Enter）")
 
     def set_status(self, text: str) -> None:
         self.status.setText(text)
 
     def set_chat_title(self, title: str) -> None:
         self.chat_title.setText(title or "未选择会话")
+
+    def set_mode(self, mode: str) -> None:
+        self._mode = "plan" if str(mode or "").lower() == "plan" else "agent"
+        self._paint_mode_pill()
+
+    def _paint_mode_pill(self) -> None:
+        label = "Plan" if self._mode == "plan" else "Agent"
+        # ∞ + 模式名 + ▾
+        self.btn_mode.setText(f"∞  {label}  ▾")
+
+    def _emit_mode(self, mode: str) -> None:
+        self._mode = mode
+        self._paint_mode_pill()
+        self.mode_changed.emit(mode)
 
     def clear(self) -> None:
         self._body_parts = []

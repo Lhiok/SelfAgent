@@ -65,10 +65,6 @@ class MainWindow(QMainWindow):
 
         self.workdir_label = QLabel("")
         self.workdir_label.setObjectName("WorkdirLabel")
-        self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["agent", "plan"])
-        self.mode_combo.setToolTip("运行模式")
-        self.mode_combo.currentTextChanged.connect(self._on_mode_changed)
         self.detail_combo = QComboBox()
         self.detail_combo.addItems(["off", "summary", "full"])
         self.detail_combo.setToolTip("过程细节")
@@ -81,7 +77,6 @@ class MainWindow(QMainWindow):
             hl = header.layout()
             if hl is not None:
                 hl.addWidget(self.workdir_label)
-                hl.addWidget(self.mode_combo)
                 hl.addWidget(self.detail_combo)
                 hl.addWidget(self.btn_delete)
 
@@ -111,6 +106,7 @@ class MainWindow(QMainWindow):
         self.chat.detail_inspect_requested.connect(
             lambda t: self.inspector.show_text("过程细节", t)
         )
+        self.chat.mode_changed.connect(self._on_mode_changed)
 
         self._refresh_sidebar()
         if not self.store.list_workspaces():
@@ -150,13 +146,11 @@ class MainWindow(QMainWindow):
         self.workdir_label.setToolTip(wd)
         mode = str(session.get("mode") or "agent")
         detail = str(session.get("detail") or "off")
-        self.mode_combo.blockSignals(True)
+        self.chat.set_mode(mode if mode in {"agent", "plan"} else "agent")
         self.detail_combo.blockSignals(True)
-        self.mode_combo.setCurrentText(mode if mode in {"agent", "plan"} else "agent")
         self.detail_combo.setCurrentText(
             detail if detail in {"off", "summary", "full"} else "off"
         )
-        self.mode_combo.blockSignals(False)
         self.detail_combo.blockSignals(False)
 
     def _add_workspace(self) -> None:
@@ -265,7 +259,6 @@ class MainWindow(QMainWindow):
     def _set_busy(self, busy: bool) -> None:
         self._busy = busy
         self.chat.set_busy(busy)
-        self.mode_combo.setEnabled(not busy)
         self.detail_combo.setEnabled(not busy)
         self.btn_delete.setEnabled(not busy)
 

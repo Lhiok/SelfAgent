@@ -350,7 +350,7 @@ QTextBrowser#InspectorView {
 #ComposerBox {
     background: #FFFFFF;
     border: 1px solid #E0E0DC;
-    border-radius: 14px;
+    border-radius: 16px;
 }
 
 #ComposerBox:focus-within {
@@ -360,8 +360,52 @@ QTextBrowser#InspectorView {
 #ComposerBox QTextEdit {
     border: none;
     background: transparent;
-    padding: 12px 14px;
+    padding: 4px 2px 2px 2px;
     color: #1A1A1A;
+}
+
+/* Composer 内模式胶囊（参照 Cursor） */
+QToolButton#ModePill {
+    background: #F0F0EE;
+    border: 1px solid #E0E0DC;
+    border-radius: 14px;
+    padding: 4px 10px;
+    color: #2A2A2A;
+    font-size: 12px;
+    font-weight: 600;
+    min-height: 26px;
+}
+
+QToolButton#ModePill:hover {
+    background: #E6E6E3;
+}
+
+QToolButton#ModePill::menu-indicator {
+    image: none;
+    width: 0;
+}
+
+QPushButton#SendCircle {
+    background: #1A1A1A;
+    color: #FFFFFF;
+    border: none;
+    border-radius: 14px;
+    min-width: 28px;
+    max-width: 28px;
+    min-height: 28px;
+    max-height: 28px;
+    padding: 0;
+    font-size: 14px;
+    font-weight: 700;
+}
+
+QPushButton#SendCircle:hover {
+    background: #333333;
+}
+
+QPushButton#SendCircle:disabled {
+    background: #C8C8C4;
+    color: #F5F5F3;
 }
 
 #StatusLabel {
