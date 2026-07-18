@@ -2,13 +2,14 @@
 
 本分支提供 **Windows 独立窗口应用**（PySide6），区别于浏览器 `web` 与终端 `cli`。通用核心与 `main` 对齐。
 
-## 使用
+## 启动
 
 ```bash
 pip install -e ".[app]"
-selfagent-app
-# 或
-python -m app
+start.bat
+# 或: python start.py
+# 或: python -m app
+# 或: selfagent-app
 ```
 
 功能：选择工作目录、新建会话、发送任务、后台执行 Agent；`ask_user` 以对话框确认。
