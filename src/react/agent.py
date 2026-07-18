@@ -259,6 +259,11 @@ class ReActAgent:
         self.mode = AgentMode.parse(configured_mode)
 
         self.max_steps = max_steps if max_steps is not None else int(react_cfg.get("max_steps", 12))
+        self.max_steps_hard_cap = int(react_cfg.get("max_steps_hard_cap", 96))
+        raw_extend = react_cfg.get("step_extend_options") or [6, 12, 24]
+        self.step_extend_options = [
+            int(x) for x in raw_extend if str(x).strip().isdigit() and int(x) > 0
+        ] or [6, 12, 24]
         self.allow_readonly_in_plan = (
             allow_readonly_in_plan
             if allow_readonly_in_plan is not None
@@ -598,275 +603,27 @@ class ReActAgent:
         mode: AgentMode,
         steps: list[ReActStep],
     ) -> ReActResult:
-        for i in range(1, self.max_steps + 1):
-            self._emit_progress(
-                {
-                    "type": "status",
-                    "phase": "thinking",
-                    "step": i,
-                    "message": f"第 {i} 步：模型思考中…",
-                }
+        step_budget = max(1, int(self.max_steps))
+        hard_cap = max(step_budget, int(self.max_steps_hard_cap))
+        i = 0
+        while True:
+            while i < step_budget:
+                i += 1
+                result = self._run_one_react_step(
+                    messages, mode=mode, steps=steps, step_index=i
+                )
+                if result is not None:
+                    return result
+
+            logger.warning(
+                f"ReAct 达到步数上限仍未结束（已用 {i}/{step_budget}，硬上限 {hard_cap}）"
             )
-            try:
-                response = self.ai.chat(messages)
-            except Exception as exc:  # noqa: BLE001
-                logger.critical(f"AI 调用失败（第 {i} 步）: {exc}")
-                err_step = ReActStep(
-                    index=i,
-                    thought=f"AI 调用失败: {exc}",
-                    final_answer=None,
-                    raw_model_output="",
-                )
-                steps.append(err_step)
-                self._emit_step(err_step)
-                return self._finalize_result(
-                    ReActResult(
-                        answer=(
-                            f"AI 调用失败（第 {i} 步）: {exc}\n"
-                            "会话未中断，可调整超时后重试，或换个更短的问题。"
-                        ),
-                        steps=steps,
-                        completed=False,
-                        messages=messages,
-                        mode=mode.value,
-                    )
-                )
-            raw = (response.content or "").strip()
-            parsed = parse_react_output(raw)
-            # 空 Final Answer 视为无效（常见于模型提前收束）
-            has_final = (
-                parsed.final_answer is not None
-                and bool(str(parsed.final_answer).strip())
-            )
-            step = ReActStep(
-                index=i,
-                thought=parsed.thought,
-                final_answer=parsed.final_answer if has_final else None,
-                raw_model_output=raw,
-            )
-
-            messages.append(AIMessage(role="assistant", content=raw or "(空回复)"))
-
-            if has_final:
-                if self._ask_buffer:
-                    # 先一次性询问暂存问题；丢掉「把问卷写进 Final Answer」的脏消息
-                    messages[-1] = AIMessage(
-                        role="assistant",
-                        content=(
-                            f"Thought: {parsed.thought or '需要用户确认细节'}\n"
-                            "Action: ask_user\n"
-                            'Action Input: {"commit": true}\n'
-                        ),
-                    )
-                    flush = self._flush_ask_buffer()
-                    step.calls.append(
-                        ActionCall(
-                            action="ask_user",
-                            action_input='{"commit":true}',
-                            observation=flush.output
-                            if flush.ok
-                            else f"ERROR: {flush.output}",
-                            ok=flush.ok,
-                            data=dict(flush.data or {}),
-                        )
-                    )
-                    steps.append(step)
-                    self._emit_step(step)
-                    messages.append(
-                        AIMessage(
-                            role="user",
-                            content=(
-                                "Observation:\n"
-                                f"{flush.output if flush.ok else 'ERROR: ' + flush.output}\n\n"
-                                "用户已确认全部暂存问题。请根据选择输出最终 Plan 与 Final Answer。"
-                                "Final Answer 只写简短摘要，禁止再粘贴选项表、请用户回复选择、或 Plan JSON。"
-                            ),
-                        )
-                    )
-                    continue
-
-                plan = None
-                answer = parsed.final_answer
-                if mode is AgentMode.PLAN:
-                    plan = parse_plan(
-                        raw,
-                        thought=parsed.thought,
-                        final_answer=parsed.final_answer,
-                    )
-                    if plan is not None and plan.ok:
-                        answer = clean_plan_summary(
-                            plan.summary or answer, has_steps=True
-                        )
-                        plan.summary = answer
-                    # 无 skill= 计划时：仍按普通 Final Answer 展示，不转入 ask_user
-                steps.append(step)
-                self._emit_step(step)
-                logger.notice(f"ReAct 完成于第 {i} 步（mode={mode.value}）")
-                return self._finalize_result(
-                    ReActResult(
-                        answer=answer,
-                        steps=steps,
-                        completed=True,
-                        messages=messages,
-                        mode=mode.value,
-                        plan=plan,
-                    )
-                )
-
-            if not parsed.actions:
-                # 有暂存问题却未输出标准 Action/非空 Final Answer：先弹窗问用户
-                if self._ask_buffer:
-                    logger.notice(
-                        f"第 {i} 步无标准 Action/Final Answer，但有暂存 ask_user，先请用户确认"
-                    )
-                    messages[-1] = AIMessage(
-                        role="assistant",
-                        content=(
-                            f"Thought: {parsed.thought or '问题已收集完毕，请用户确认'}\n"
-                            "Action: ask_user\n"
-                            'Action Input: {"commit": true}\n'
-                        ),
-                    )
-                    flush = self._flush_ask_buffer()
-                    step.calls.append(
-                        ActionCall(
-                            action="ask_user",
-                            action_input='{"commit":true}',
-                            observation=flush.output
-                            if flush.ok
-                            else f"ERROR: {flush.output}",
-                            ok=flush.ok,
-                            data=dict(flush.data or {}),
-                        )
-                    )
-                    steps.append(step)
-                    self._emit_step(step)
-                    messages.append(
-                        AIMessage(
-                            role="user",
-                            content=(
-                                "Observation:\n"
-                                f"{flush.output if flush.ok else 'ERROR: ' + flush.output}\n\n"
-                                "用户已确认全部暂存问题。请根据选择输出最终 Plan 与 Final Answer。"
-                                "Final Answer 只写简短摘要，禁止再粘贴选项表。"
-                            ),
-                        )
-                    )
-                    continue
-
-                # 空回复 / 空 Final Answer：续跑提醒，避免长任务半截中断
-                if self._empty_nudge_count < 2:
-                    self._empty_nudge_count += 1
-                    reason = (
-                        "空回复"
-                        if not raw
-                        else (
-                            "空 Final Answer"
-                            if parsed.final_answer is not None
-                            else "未解析到 Action/Final Answer"
-                        )
-                    )
-                    logger.warning(
-                        f"第 {i} 步{reason}，续跑提醒（{self._empty_nudge_count}/2）"
-                    )
-                    steps.append(step)
-                    self._emit_step(step)
-                    messages.append(
-                        AIMessage(
-                            role="user",
-                            content=(
-                                "Observation:\n"
-                                f"系统：上一步无效（{reason}）。任务若未完成，请继续输出 "
-                                "Thought + Action/Action Input；"
-                                "仅在全部完成后输出非空 Final Answer。\n"
-                                "若使用 todo_tracker：先 start 当前项 → 执行工具 → 再 complete。"
-                            ),
-                        )
-                    )
-                    continue
-
-                logger.warning(f"第 {i} 步未解析到 Action/Final Answer，结束循环")
-                fallback = (parsed.thought or raw or "").strip() or (
-                    "模型连续空回复，任务未完成。请发送「继续」重试。"
-                )
-                step.final_answer = fallback
-                plan = None
-                if mode is AgentMode.PLAN:
-                    plan = parse_plan(raw, thought=parsed.thought, final_answer=fallback)
-                steps.append(step)
-                self._emit_step(step)
-                return self._finalize_result(
-                    ReActResult(
-                        answer=fallback,
-                        steps=steps,
-                        completed=False,
-                        messages=messages,
-                        mode=mode.value,
-                        plan=plan,
-                    )
-                )
-
-            action_names = [item.action for item in parsed.actions]
-            self._emit_progress(
-                {
-                    "type": "status",
-                    "phase": "acting",
-                    "step": i,
-                    "actions": action_names,
-                    "message": f"第 {i} 步：执行 {', '.join(action_names)}…",
-                }
-            )
-            for item in parsed.actions:
-                # 遇到其它工具前，先把暂存的 ask_user 一次性问完
-                if item.action != "ask_user" and self._ask_buffer:
-                    flush = self._flush_ask_buffer()
-                    step.calls.append(
-                        ActionCall(
-                            action="ask_user",
-                            action_input='{"commit":true}',
-                            observation=flush.output
-                            if flush.ok
-                            else f"ERROR: {flush.output}",
-                            ok=flush.ok,
-                            data=dict(flush.data or {}),
-                        )
-                    )
-                    logger.notice(
-                        f"ReAct 第 {i} 步先提交暂存 ask_user ok={flush.ok}"
-                    )
-
-                skill_result = self._execute_action(mode, item.action, item.action_input)
-                observation = (
-                    skill_result.output if skill_result.ok else f"ERROR: {skill_result.output}"
-                )
-                step.calls.append(
-                    ActionCall(
-                        action=item.action,
-                        action_input=item.action_input,
-                        observation=observation,
-                        ok=skill_result.ok,
-                        data=dict(skill_result.data or {}),
-                    )
-                )
-                logger.notice(
-                    f"ReAct 第 {i} 步 Action={item.action} ok={skill_result.ok} "
-                    f"(mode={mode.value}, 共 {len(parsed.actions)} 个)"
-                )
-
-            observation_text = _format_observations(step.calls)
-            steps.append(step)
-            self._emit_step(step)
-            prefix = "Observations" if len(step.calls) > 1 else "Observation"
-            messages.append(AIMessage(role="user", content=f"{prefix}:\n{observation_text}"))
-
-        logger.warning("ReAct 达到最大步数仍未结束")
-        # 避免步数用尽时暂存问题永远不弹出
-        if self._ask_buffer:
-            flush = self._flush_ask_buffer()
-            steps.append(
-                ReActStep(
+            # 步数用尽前先弹出暂存问题，答案写入对话后再询问是否加步
+            if self._ask_buffer:
+                flush = self._flush_ask_buffer()
+                ask_step = ReActStep(
                     index=len(steps) + 1,
-                    thought="达到最大步数，先请用户确认暂存问题",
+                    thought="达到步数上限，先请用户确认暂存问题",
                     calls=[
                         ActionCall(
                             action="ask_user",
@@ -879,14 +636,126 @@ class ReActAgent:
                         )
                     ],
                 )
+                steps.append(ask_step)
+                self._emit_step(ask_step)
+                messages.append(
+                    AIMessage(
+                        role="user",
+                        content=(
+                            "Observation:\n"
+                            f"{flush.output if flush.ok else 'ERROR: ' + flush.output}\n\n"
+                            "以上为用户对暂存问题的确认。系统接下来会询问是否增加本轮可用步数。"
+                        ),
+                    )
+                )
+
+            if hard_cap - step_budget <= 0:
+                return self._finalize_result(
+                    ReActResult(
+                        answer=(
+                            f"已达本轮步数硬上限（{hard_cap}），仍未得到 Final Answer。"
+                            "请开新对话或提高 config 中 react.max_steps_hard_cap 后再继续。"
+                        ),
+                        steps=steps,
+                        completed=False,
+                        messages=messages,
+                        mode=mode.value,
+                    )
+                )
+
+            extra = self._prompt_extend_steps(
+                steps=steps,
+                messages=messages,
+                used=i,
+                budget=step_budget,
+                hard_cap=hard_cap,
             )
-            self._emit_step(steps[-1])
+            if extra is None or extra <= 0:
+                return self._finalize_result(
+                    ReActResult(
+                        answer=(
+                            f"已达本轮步数上限（{step_budget}），用户选择结束。"
+                            "仍未得到 Final Answer；可发送「继续」并同意加步后重试。"
+                        ),
+                        steps=steps,
+                        completed=False,
+                        messages=messages,
+                        mode=mode.value,
+                    )
+                )
+
+            new_budget = min(step_budget + extra, hard_cap)
+            if new_budget <= step_budget:
+                return self._finalize_result(
+                    ReActResult(
+                        answer=(
+                            f"已达本轮步数硬上限（{hard_cap}），无法再增加。"
+                            "仍未得到 Final Answer。"
+                        ),
+                        steps=steps,
+                        completed=False,
+                        messages=messages,
+                        mode=mode.value,
+                    )
+                )
+
+            logger.notice(f"用户同意延长本轮步数: {step_budget} -> {new_budget}（+{extra}）")
+            step_budget = new_budget
+            self._emit_progress(
+                {
+                    "type": "status",
+                    "phase": "step_extend",
+                    "step": i,
+                    "message": f"步数已延长至 {step_budget}，继续执行…",
+                }
+            )
+            messages.append(
+                AIMessage(
+                    role="user",
+                    content=(
+                        "Observation:\n"
+                        f"用户同意将本轮可用步数延长至 {step_budget}（已用 {i}）。"
+                        "请从下一步继续完成任务，不要重复已完成的工作；"
+                        "完成后输出非空 Final Answer。"
+                    ),
+                )
+            )
+
+    def _run_one_react_step(
+        self,
+        messages: list[AIMessage],
+        *,
+        mode: AgentMode,
+        steps: list[ReActStep],
+        step_index: int,
+    ) -> ReActResult | None:
+        """执行单步；若本轮应结束则返回 ReActResult，否则返回 None 继续。"""
+        i = step_index
+        self._emit_progress(
+            {
+                "type": "status",
+                "phase": "thinking",
+                "step": i,
+                "message": f"第 {i} 步：模型思考中…",
+            }
+        )
+        try:
+            response = self.ai.chat(messages)
+        except Exception as exc:  # noqa: BLE001
+            logger.critical(f"AI 调用失败（第 {i} 步）: {exc}")
+            err_step = ReActStep(
+                index=i,
+                thought=f"AI 调用失败: {exc}",
+                final_answer=None,
+                raw_model_output="",
+            )
+            steps.append(err_step)
+            self._emit_step(err_step)
             return self._finalize_result(
                 ReActResult(
                     answer=(
-                        flush.output
-                        if flush.ok
-                        else "达到最大步数，且确认问题失败"
+                        f"AI 调用失败（第 {i} 步）: {exc}\n"
+                        "会话未中断，可调整超时后重试，或换个更短的问题。"
                     ),
                     steps=steps,
                     completed=False,
@@ -894,15 +763,367 @@ class ReActAgent:
                     mode=mode.value,
                 )
             )
-        return self._finalize_result(
-            ReActResult(
-                answer="达到最大步数仍未得到 Final Answer",
-                steps=steps,
-                completed=False,
-                messages=messages,
-                mode=mode.value,
+        raw = (response.content or "").strip()
+        parsed = parse_react_output(raw)
+        # 空 Final Answer 视为无效（常见于模型提前收束）
+        has_final = (
+            parsed.final_answer is not None
+            and bool(str(parsed.final_answer).strip())
+        )
+        step = ReActStep(
+            index=i,
+            thought=parsed.thought,
+            final_answer=parsed.final_answer if has_final else None,
+            raw_model_output=raw,
+        )
+
+        messages.append(AIMessage(role="assistant", content=raw or "(空回复)"))
+
+        if has_final:
+            if self._ask_buffer:
+                # 先一次性询问暂存问题；丢掉「把问卷写进 Final Answer」的脏消息
+                messages[-1] = AIMessage(
+                    role="assistant",
+                    content=(
+                        f"Thought: {parsed.thought or '需要用户确认细节'}\n"
+                        "Action: ask_user\n"
+                        'Action Input: {"commit": true}\n'
+                    ),
+                )
+                flush = self._flush_ask_buffer()
+                step.calls.append(
+                    ActionCall(
+                        action="ask_user",
+                        action_input='{"commit":true}',
+                        observation=flush.output
+                        if flush.ok
+                        else f"ERROR: {flush.output}",
+                        ok=flush.ok,
+                        data=dict(flush.data or {}),
+                    )
+                )
+                steps.append(step)
+                self._emit_step(step)
+                messages.append(
+                    AIMessage(
+                        role="user",
+                        content=(
+                            "Observation:\n"
+                            f"{flush.output if flush.ok else 'ERROR: ' + flush.output}\n\n"
+                            "用户已确认全部暂存问题。请根据选择输出最终 Plan 与 Final Answer。"
+                            "Final Answer 只写简短摘要，禁止再粘贴选项表、请用户回复选择、或 Plan JSON。"
+                        ),
+                    )
+                )
+                return None
+
+            plan = None
+            answer = parsed.final_answer
+            if mode is AgentMode.PLAN:
+                plan = parse_plan(
+                    raw,
+                    thought=parsed.thought,
+                    final_answer=parsed.final_answer,
+                )
+                if plan is not None and plan.ok:
+                    answer = clean_plan_summary(
+                        plan.summary or answer, has_steps=True
+                    )
+                    plan.summary = answer
+                # 无 skill= 计划时：仍按普通 Final Answer 展示，不转入 ask_user
+            steps.append(step)
+            self._emit_step(step)
+            logger.notice(f"ReAct 完成于第 {i} 步（mode={mode.value}）")
+            return self._finalize_result(
+                ReActResult(
+                    answer=answer,
+                    steps=steps,
+                    completed=True,
+                    messages=messages,
+                    mode=mode.value,
+                    plan=plan,
+                )
+            )
+
+        if not parsed.actions:
+            # 有暂存问题却未输出标准 Action/非空 Final Answer：先弹窗问用户
+            if self._ask_buffer:
+                logger.notice(
+                    f"第 {i} 步无标准 Action/Final Answer，但有暂存 ask_user，先请用户确认"
+                )
+                messages[-1] = AIMessage(
+                    role="assistant",
+                    content=(
+                        f"Thought: {parsed.thought or '问题已收集完毕，请用户确认'}\n"
+                        "Action: ask_user\n"
+                        'Action Input: {"commit": true}\n'
+                    ),
+                )
+                flush = self._flush_ask_buffer()
+                step.calls.append(
+                    ActionCall(
+                        action="ask_user",
+                        action_input='{"commit":true}',
+                        observation=flush.output
+                        if flush.ok
+                        else f"ERROR: {flush.output}",
+                        ok=flush.ok,
+                        data=dict(flush.data or {}),
+                    )
+                )
+                steps.append(step)
+                self._emit_step(step)
+                messages.append(
+                    AIMessage(
+                        role="user",
+                        content=(
+                            "Observation:\n"
+                            f"{flush.output if flush.ok else 'ERROR: ' + flush.output}\n\n"
+                            "用户已确认全部暂存问题。请根据选择输出最终 Plan 与 Final Answer。"
+                            "Final Answer 只写简短摘要，禁止再粘贴选项表。"
+                        ),
+                    )
+                )
+                return None
+
+            # 空回复 / 空 Final Answer：续跑提醒，避免长任务半截中断
+            if self._empty_nudge_count < 2:
+                self._empty_nudge_count += 1
+                reason = (
+                    "空回复"
+                    if not raw
+                    else (
+                        "空 Final Answer"
+                        if parsed.final_answer is not None
+                        else "未解析到 Action/Final Answer"
+                    )
+                )
+                logger.warning(
+                    f"第 {i} 步{reason}，续跑提醒（{self._empty_nudge_count}/2）"
+                )
+                steps.append(step)
+                self._emit_step(step)
+                messages.append(
+                    AIMessage(
+                        role="user",
+                        content=(
+                            "Observation:\n"
+                            f"系统：上一步无效（{reason}）。任务若未完成，请继续输出 "
+                            "Thought + Action/Action Input；"
+                            "仅在全部完成后输出非空 Final Answer。\n"
+                            "若使用 todo_tracker：先 start 当前项 → 执行工具 → 再 complete。"
+                        ),
+                    )
+                )
+                return None
+
+            logger.warning(f"第 {i} 步未解析到 Action/Final Answer，结束循环")
+            fallback = (parsed.thought or raw or "").strip() or (
+                "模型连续空回复，任务未完成。请发送「继续」重试。"
+            )
+            step.final_answer = fallback
+            plan = None
+            if mode is AgentMode.PLAN:
+                plan = parse_plan(raw, thought=parsed.thought, final_answer=fallback)
+            steps.append(step)
+            self._emit_step(step)
+            return self._finalize_result(
+                ReActResult(
+                    answer=fallback,
+                    steps=steps,
+                    completed=False,
+                    messages=messages,
+                    mode=mode.value,
+                    plan=plan,
+                )
+            )
+
+        action_names = [item.action for item in parsed.actions]
+        self._emit_progress(
+            {
+                "type": "status",
+                "phase": "acting",
+                "step": i,
+                "actions": action_names,
+                "message": f"第 {i} 步：执行 {', '.join(action_names)}…",
+            }
+        )
+        for item in parsed.actions:
+            # 遇到其它工具前，先把暂存的 ask_user 一次性问完
+            if item.action != "ask_user" and self._ask_buffer:
+                flush = self._flush_ask_buffer()
+                step.calls.append(
+                    ActionCall(
+                        action="ask_user",
+                        action_input='{"commit":true}',
+                        observation=flush.output
+                        if flush.ok
+                        else f"ERROR: {flush.output}",
+                        ok=flush.ok,
+                        data=dict(flush.data or {}),
+                    )
+                )
+                logger.notice(
+                    f"ReAct 第 {i} 步先提交暂存 ask_user ok={flush.ok}"
+                )
+
+            skill_result = self._execute_action(mode, item.action, item.action_input)
+            observation = (
+                skill_result.output if skill_result.ok else f"ERROR: {skill_result.output}"
+            )
+            step.calls.append(
+                ActionCall(
+                    action=item.action,
+                    action_input=item.action_input,
+                    observation=observation,
+                    ok=skill_result.ok,
+                    data=dict(skill_result.data or {}),
+                )
+            )
+            logger.notice(
+                f"ReAct 第 {i} 步 Action={item.action} ok={skill_result.ok} "
+                f"(mode={mode.value}, 共 {len(parsed.actions)} 个)"
+            )
+
+        observation_text = _format_observations(step.calls)
+        steps.append(step)
+        self._emit_step(step)
+        prefix = "Observations" if len(step.calls) > 1 else "Observation"
+        messages.append(AIMessage(role="user", content=f"{prefix}:\n{observation_text}"))
+        return None
+
+    def _prompt_extend_steps(
+        self,
+        *,
+        steps: list[ReActStep],
+        messages: list[AIMessage],
+        used: int,
+        budget: int,
+        hard_cap: int,
+    ) -> int | None:
+        """步数用尽时询问用户是否增加本轮可用步数。返回增量，拒绝则为 None。"""
+        remain = max(0, hard_cap - budget)
+        options: list[str] = []
+        extend_map: dict[int, int] = {}
+        for n in self.step_extend_options:
+            if n <= 0 or n > remain:
+                continue
+            idx = len(options) + 1
+            label = f"{chr(64 + idx)}. 再增加 {n} 步继续（上限将变为 {budget + n}）"
+            options.append(label)
+            extend_map[idx] = n
+        options.append(f"{chr(64 + len(options) + 1)}. 结束本轮，不再增加步数")
+        stop_idx = len(options)
+
+        if not extend_map:
+            return None
+
+        question = (
+            f"本轮对话已用尽可用步数（{used}/{budget}）。"
+            f"硬上限为 {hard_cap}。"
+            "是否增加此轮可用步数以继续任务？"
+        )
+        payload = {
+            "id": "extend_steps",
+            "question": question,
+            "options": options,
+            "allow_multiple": False,
+            "allow_custom": False,
+            "default": "1",
+            "context": "选择加步后将从断点继续；选结束则本轮停止。",
+        }
+        self._emit_progress(
+            {
+                "type": "status",
+                "phase": "ask_user",
+                "message": "等待你确认是否增加本轮步数…",
+            }
+        )
+        result = self.skills.run(
+            "ask_user",
+            {"questions": [payload]},
+            permission=self.permission,
+            enforce_permission=False,
+        )
+        ask_step = ReActStep(
+            index=len(steps) + 1,
+            thought="步数用尽，询问用户是否延长本轮可用步数",
+            calls=[
+                ActionCall(
+                    action="ask_user",
+                    action_input='{"questions":[{"id":"extend_steps"}]}',
+                    observation=result.output if result.ok else f"ERROR: {result.output}",
+                    ok=result.ok,
+                    data=dict(result.data or {}),
+                )
+            ],
+        )
+        steps.append(ask_step)
+        self._emit_step(ask_step)
+        messages.append(
+            AIMessage(
+                role="assistant",
+                content=(
+                    "Thought: 步数已用尽，询问用户是否增加本轮可用步数\n"
+                    "Action: ask_user\n"
+                    'Action Input: {"id":"extend_steps"}\n'
+                ),
             )
         )
+        messages.append(
+            AIMessage(
+                role="user",
+                content=f"Observation:\n{result.output if result.ok else 'ERROR: ' + result.output}",
+            )
+        )
+        if not result.ok:
+            logger.warning(f"询问加步失败: {result.output}")
+            return None
+        return self._parse_extend_choice(result.data, extend_map, stop_idx)
+
+    def _parse_extend_choice(
+        self,
+        data: dict[str, Any] | None,
+        extend_map: dict[int, int],
+        stop_idx: int,
+    ) -> int | None:
+        if not isinstance(data, dict):
+            return None
+        row = data
+        if isinstance(data.get("questions"), list) and data["questions"]:
+            first = data["questions"][0]
+            if isinstance(first, dict):
+                row = first
+        indexes = row.get("indexes")
+        if isinstance(indexes, list) and indexes:
+            try:
+                choice = int(indexes[0])
+            except (TypeError, ValueError):
+                choice = None
+            else:
+                if choice == stop_idx:
+                    return None
+                if choice in extend_map:
+                    return extend_map[choice]
+        selected = row.get("selected")
+        texts = selected if isinstance(selected, list) else ([selected] if selected else [])
+        for text in texts:
+            s = str(text)
+            if "结束" in s or "不再增加" in s:
+                return None
+            for idx, n in extend_map.items():
+                if f"增加 {n} 步" in s or f"+{n}" in s:
+                    return n
+                if s.strip().upper().startswith(chr(64 + idx)):
+                    return n
+        raw = str(row.get("raw") or "").strip()
+        if raw.isdigit():
+            choice = int(raw)
+            if choice == stop_idx:
+                return None
+            if choice in extend_map:
+                return extend_map[choice]
+        return None
 
     def _emit_progress(self, event: dict[str, Any]) -> None:
         if self.on_progress is None:

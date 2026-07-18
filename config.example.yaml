@@ -33,6 +33,10 @@ react:
   # 默认模式：agent（直接执行）| plan（先规划）
   mode: agent
   max_steps: 12
+  # 本轮步数硬上限（用户加步也不能超过）
+  max_steps_hard_cap: 96
+  # 步数用尽时询问用户可增加的步数选项
+  step_extend_options: [6, 12, 24]
   # 可选：Agent 工作目录（local_file / search_code / shell_run / git_ops 的 root）
   # workdir: "."
   # 过程细节：off（仅最终答案）| summary（Thought+Action）| full（含 Input/Observation）
