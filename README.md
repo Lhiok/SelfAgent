@@ -54,9 +54,9 @@ feishu:
 
 ## 端侧入口（其它分支）
 
-- **浏览器工作台**：`git checkout web` 后见该分支 README（`pip install -e ".[ui]"` → `python -m web`）
-- **命令行 CLI**：`git checkout cli` 后使用 `selfagent-cli` / `python -m cli`
-- **Windows 桌面应用**：`git checkout app` 后使用 `selfagent-app` / `python -m app`
+- **浏览器工作台**：`git checkout web` → `pip install -e ".[ui]"` → `start.bat`（或 `python start.py` / `selfagent-web`）
+- **命令行 CLI**：`git checkout cli` → `pip install -e ".[dev,skills]"` → `start.bat`（或 `python start.py` / `selfagent-cli`）
+- **Windows 桌面应用**：`git checkout app` → `pip install -e ".[app]"` → `start.bat`（或 `python start.py` / `selfagent-app`）
 
 ## 快速使用
 
