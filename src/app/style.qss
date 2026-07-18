@@ -366,22 +366,65 @@ QTextBrowser#InspectorView {
 
 /* Composer 内模式胶囊（参照 Cursor） */
 QToolButton#ModePill {
-    background: #F0F0EE;
-    border: 1px solid #E0E0DC;
+    background: #2C2C2C;
+    border: 1px solid #3A3A3A;
     border-radius: 14px;
-    padding: 4px 10px;
-    color: #2A2A2A;
+    padding: 4px 12px;
+    color: #F2F2F2;
     font-size: 12px;
     font-weight: 600;
     min-height: 26px;
 }
 
 QToolButton#ModePill:hover {
-    background: #E6E6E3;
+    background: #3A3A3A;
+    border-color: #4A4A4A;
+}
+
+QToolButton#ModePill:disabled {
+    background: #E8E8E5;
+    border-color: #E0E0DC;
+    color: #A0A0A0;
 }
 
 QToolButton#ModePill::menu-indicator {
     image: none;
+    width: 0;
+}
+
+/* Agent/Plan 下拉：对齐 Cursor 深色菜单 */
+QMenu#ModeMenu {
+    background: #2A2A2A;
+    border: 1px solid #3C3C3C;
+    border-radius: 10px;
+    padding: 6px;
+    color: #F0F0F0;
+}
+
+QMenu#ModeMenu::item {
+    padding: 9px 16px 9px 14px;
+    border-radius: 6px;
+    margin: 1px 0;
+    min-width: 168px;
+    background: transparent;
+    color: #F0F0F0;
+    font-size: 13px;
+}
+
+QMenu#ModeMenu::item:selected {
+    background: #3A3A3A;
+}
+
+QMenu#ModeMenu::item:checked {
+    background: #333333;
+}
+
+QMenu#ModeMenu::indicator {
+    width: 0;
+    height: 0;
+}
+
+QMenu#ModeMenu::right-arrow {
     width: 0;
 }
 

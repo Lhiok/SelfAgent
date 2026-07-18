@@ -136,14 +136,17 @@ class ChatPane(QWidget):
         self.btn_mode.setObjectName("ModePill")
         self.btn_mode.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.btn_mode.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-        mode_menu = QMenu(self.btn_mode)
-        act_agent = QAction("Agent", mode_menu)
-        act_plan = QAction("Plan", mode_menu)
-        act_agent.triggered.connect(lambda: self._emit_mode("agent"))
-        act_plan.triggered.connect(lambda: self._emit_mode("plan"))
-        mode_menu.addAction(act_agent)
-        mode_menu.addAction(act_plan)
-        self.btn_mode.setMenu(mode_menu)
+        self._mode_menu = QMenu(self.btn_mode)
+        self._mode_menu.setObjectName("ModeMenu")
+        self._act_agent = QAction(self._mode_menu)
+        self._act_plan = QAction(self._mode_menu)
+        for act in (self._act_agent, self._act_plan):
+            act.setCheckable(True)
+        self._act_agent.triggered.connect(lambda: self._emit_mode("agent"))
+        self._act_plan.triggered.connect(lambda: self._emit_mode("plan"))
+        self._mode_menu.addAction(self._act_agent)
+        self._mode_menu.addAction(self._act_plan)
+        self.btn_mode.setMenu(self._mode_menu)
         self._paint_mode_pill()
         tools.addWidget(self.btn_mode)
 
@@ -191,8 +194,20 @@ class ChatPane(QWidget):
 
     def _paint_mode_pill(self) -> None:
         label = "Plan" if self._mode == "plan" else "Agent"
-        # ∞ + 模式名 + ▾
         self.btn_mode.setText(f"∞  {label}  ▾")
+        self._act_agent.blockSignals(True)
+        self._act_plan.blockSignals(True)
+        self._act_agent.setChecked(self._mode == "agent")
+        self._act_plan.setChecked(self._mode == "plan")
+        # 文案 + 右侧勾选，对齐 Cursor 菜单
+        self._act_agent.setText(
+            "∞    Agent" + ("          ✓" if self._mode == "agent" else "             ")
+        )
+        self._act_plan.setText(
+            "☰    Plan" + ("            ✓" if self._mode == "plan" else "               ")
+        )
+        self._act_agent.blockSignals(False)
+        self._act_plan.blockSignals(False)
 
     def _emit_mode(self, mode: str) -> None:
         self._mode = mode
