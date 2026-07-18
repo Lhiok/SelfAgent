@@ -31,6 +31,8 @@ ai:
     api_key: "sk-xxx"
     base_url: "https://api.deepseek.com"
     model: "deepseek-chat"
+    timeout: 180.0   # 读超时秒数；慢响应可再加大，或写 {connect: 10, read: 300}
+    retries: 1       # 超时/网络错误额外重试次数
 
 feishu:
   webhook_url: "https://open.feishu.cn/open-apis/bot/v2/hook/xxx"

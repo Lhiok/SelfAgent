@@ -60,11 +60,19 @@ def main() -> None:
             print(f"已切换细节级别: {conv.agent.detail}")
             continue
         if text == "/confirm":
-            result = conv.confirm_plan()
+            try:
+                result = conv.confirm_plan()
+            except Exception as exc:  # noqa: BLE001
+                print(f"助手> 执行计划失败: {exc}")
+                continue
             _print_result(result, streamed=conv.agent.stream_detail)
             continue
 
-        result = conv.chat(text)
+        try:
+            result = conv.chat(text)
+        except Exception as exc:  # noqa: BLE001
+            print(f"助手> 本轮失败（会话仍可继续）: {exc}")
+            continue
         _print_result(result, streamed=conv.agent.stream_detail)
         if result.plan and result.plan.ok:
             print("--- 待确认计划 ---")

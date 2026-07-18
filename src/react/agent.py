@@ -432,7 +432,30 @@ class ReActAgent:
         logger.notice(f"ReAct 开始任务，mode={mode.value}，max_steps={self.max_steps}")
 
         for i in range(1, self.max_steps + 1):
-            response = self.ai.chat(messages)
+            try:
+                response = self.ai.chat(messages)
+            except Exception as exc:  # noqa: BLE001
+                logger.critical(f"AI 调用失败（第 {i} 步）: {exc}")
+                err_step = ReActStep(
+                    index=i,
+                    thought=f"AI 调用失败: {exc}",
+                    final_answer=None,
+                    raw_model_output="",
+                )
+                steps.append(err_step)
+                self._emit_step(err_step)
+                return self._finalize_result(
+                    ReActResult(
+                        answer=(
+                            f"AI 调用失败（第 {i} 步）: {exc}\n"
+                            "会话未中断，可调整超时后重试，或换个更短的问题。"
+                        ),
+                        steps=steps,
+                        completed=False,
+                        messages=messages,
+                        mode=mode.value,
+                    )
+                )
             raw = response.content.strip()
             parsed = parse_react_output(raw)
             step = ReActStep(

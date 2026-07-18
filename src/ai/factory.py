@@ -43,6 +43,7 @@ def create_ai_client(
         "base_url": "base_url",
         "model": "model",
         "timeout": "timeout",
+        "retries": "retries",
         "api_key_env": "api_key_env",
         "base_url_env": "base_url_env",
         "model_env": "model_env",

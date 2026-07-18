@@ -13,6 +13,25 @@ from log import get_logger
 logger = get_logger("ai.deepseek")
 
 
+def build_httpx_timeout(timeout: float | int | dict[str, Any] | httpx.Timeout) -> httpx.Timeout:
+    """将配置中的 timeout 转为 httpx.Timeout（区分 connect / read）。"""
+    if isinstance(timeout, httpx.Timeout):
+        return timeout
+    if isinstance(timeout, dict):
+        read = float(timeout.get("read", timeout.get("timeout", 180.0)))
+        connect = float(timeout.get("connect", 10.0))
+        write = float(timeout.get("write", min(30.0, read)))
+        pool = float(timeout.get("pool", 10.0))
+        return httpx.Timeout(connect=connect, read=read, write=write, pool=pool)
+    read = float(timeout)
+    return httpx.Timeout(
+        connect=min(10.0, read),
+        read=read,
+        write=min(30.0, read),
+        pool=10.0,
+    )
+
+
 class DeepSeekClient(AIClient):
     provider = "deepseek"
 
@@ -22,7 +41,8 @@ class DeepSeekClient(AIClient):
         api_key: str | None = None,
         base_url: str | None = None,
         model: str | None = None,
-        timeout: float = 60.0,
+        timeout: float | dict[str, Any] = 180.0,
+        retries: int = 1,
         api_key_env: str = "DEEPSEEK_API_KEY",
         base_url_env: str = "DEEPSEEK_BASE_URL",
         model_env: str = "DEEPSEEK_MODEL",
@@ -37,7 +57,8 @@ class DeepSeekClient(AIClient):
             or get_env(model_env, default="deepseek-chat", quiet=True)
             or "deepseek-chat"
         )
-        self.timeout = timeout
+        self.timeout = build_httpx_timeout(timeout)
+        self.retries = max(0, int(retries))
 
         if not self.api_key:
             logger.critical("DeepSeek API Key 未配置")
@@ -72,14 +93,40 @@ class DeepSeekClient(AIClient):
             "Content-Type": "application/json",
         }
 
-        logger.notice(f"请求 DeepSeek: model={model}")
-        try:
-            with httpx.Client(timeout=self.timeout) as client:
-                resp = client.post(url, headers=headers, json=body)
-                data = resp.json()
-        except Exception as exc:  # noqa: BLE001
-            logger.critical(f"DeepSeek 请求失败: {exc}")
-            raise
+        logger.notice(
+            f"请求 DeepSeek: model={model} read_timeout={self.timeout.read}s "
+            f"retries={self.retries}"
+        )
+        data: dict[str, Any] | None = None
+        resp: httpx.Response | None = None
+        last_exc: Exception | None = None
+
+        for attempt in range(self.retries + 1):
+            try:
+                with httpx.Client(timeout=self.timeout) as client:
+                    resp = client.post(url, headers=headers, json=body)
+                    data = resp.json()
+                last_exc = None
+                break
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                last_exc = exc
+                if attempt < self.retries:
+                    logger.warning(
+                        f"DeepSeek 网络/超时，重试 {attempt + 1}/{self.retries}: {exc}"
+                    )
+                    continue
+                logger.critical(f"DeepSeek 请求失败: {exc}")
+                raise RuntimeError(
+                    f"DeepSeek 请求超时或网络错误（read={self.timeout.read}s，"
+                    f"已重试 {self.retries} 次）。可增大 config.ai.deepseek.timeout 后重试。"
+                    f" 原因: {exc}"
+                ) from exc
+            except Exception as exc:  # noqa: BLE001
+                logger.critical(f"DeepSeek 请求失败: {exc}")
+                raise
+
+        if last_exc is not None or resp is None or data is None:
+            raise RuntimeError(f"DeepSeek 请求失败: {last_exc}")
 
         if resp.status_code >= 400:
             logger.critical(f"DeepSeek HTTP {resp.status_code}: {data}")
