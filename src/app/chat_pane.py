@@ -17,6 +17,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.theme import wrap_chat_html
+
 
 class ChatPane(QWidget):
     send_requested = Signal(str)
@@ -28,43 +30,53 @@ class ChatPane(QWidget):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self.setObjectName("ChatPane")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(10)
 
         self.todo_bar = QProgressBar()
-        self.todo_bar.setMaximumHeight(14)
-        self.todo_bar.setTextVisible(True)
+        self.todo_bar.setTextVisible(False)
+        self.todo_bar.setFixedHeight(8)
         self.todo_label = QLabel("")
         self.todo_label.setWordWrap(True)
         todo_wrap = QVBoxLayout()
-        todo_wrap.setContentsMargins(0, 0, 0, 0)
+        todo_wrap.setContentsMargins(10, 8, 10, 8)
+        todo_wrap.setSpacing(6)
         todo_wrap.addWidget(self.todo_bar)
         todo_wrap.addWidget(self.todo_label)
         self.todo_widget = QWidget()
+        self.todo_widget.setObjectName("TodoBanner")
         self.todo_widget.setLayout(todo_wrap)
         self.todo_widget.hide()
         layout.addWidget(self.todo_widget)
 
         self.view = QTextBrowser()
+        self.view.setObjectName("ChatView")
         self.view.setOpenLinks(False)
         self.view.anchorClicked.connect(self._on_anchor)
         layout.addWidget(self.view, 1)
 
         self.plan_row = QHBoxLayout()
+        self.plan_row.setSpacing(8)
         self.btn_plan_detail = QPushButton("查看计划细节")
+        self.btn_plan_detail.setObjectName("GhostButton")
         self.btn_confirm = QPushButton("确认执行")
+        self.btn_confirm.setObjectName("PrimaryButton")
         self.btn_plan_detail.clicked.connect(self._emit_plan_detail)
         self.btn_confirm.clicked.connect(self.confirm_plan_requested.emit)
         self.plan_row.addWidget(self.btn_plan_detail)
         self.plan_row.addWidget(self.btn_confirm)
         self.plan_row.addStretch(1)
         self.plan_widget = QWidget()
+        self.plan_widget.setObjectName("ActionStrip")
         self.plan_widget.setLayout(self.plan_row)
         self.plan_widget.hide()
         layout.addWidget(self.plan_widget)
 
         self.ask_row = QHBoxLayout()
         self.btn_open_ask = QPushButton("打开确认面板")
+        self.btn_open_ask.setObjectName("PrimaryButton")
         self.btn_open_ask.clicked.connect(self.open_ask_requested.emit)
         self.ask_row.addWidget(self.btn_open_ask)
         self.ask_row.addStretch(1)
@@ -73,24 +85,31 @@ class ChatPane(QWidget):
         self.ask_widget.hide()
         layout.addWidget(self.ask_widget)
 
-        composer = QHBoxLayout()
+        composer_box = QWidget()
+        composer_box.setObjectName("ComposerBox")
+        composer = QHBoxLayout(composer_box)
+        composer.setContentsMargins(4, 4, 8, 4)
+        composer.setSpacing(8)
         self.input = QTextEdit()
-        self.input.setPlaceholderText("输入任务，Ctrl+Enter 发送…")
-        self.input.setFixedHeight(72)
+        self.input.setPlaceholderText("描述任务…  Ctrl+Enter 发送")
+        self.input.setFixedHeight(78)
         self.btn_send = QPushButton("发送")
+        self.btn_send.setObjectName("PrimaryButton")
+        self.btn_send.setMinimumWidth(88)
         self.btn_send.clicked.connect(self._emit_send)
         composer.addWidget(self.input, 1)
         composer.addWidget(self.btn_send)
-        layout.addLayout(composer)
+        layout.addWidget(composer_box)
 
         self.status = QLabel("就绪")
+        self.status.setObjectName("StatusLabel")
         layout.addWidget(self.status)
 
         QShortcut(QKeySequence("Ctrl+Return"), self.input, self._emit_send)
 
         self._pending_plan: dict[str, Any] | None = None
         self._changes_by_key: dict[str, dict[str, Any]] = {}
-        self._live_html = ""
+        self._body_parts: list[str] = []
         self._live_steps: list[dict[str, Any]] = []
 
     def set_busy(self, busy: bool) -> None:
@@ -102,13 +121,14 @@ class ChatPane(QWidget):
         self.status.setText(text)
 
     def clear(self) -> None:
-        self.view.clear()
-        self._live_html = ""
+        self._body_parts = []
+        self._live_steps = []
         self._changes_by_key.clear()
         self._pending_plan = None
         self.plan_widget.hide()
         self.ask_widget.hide()
         self.set_todos(None)
+        self._paint()
 
     def render_session(self, session: dict[str, Any]) -> None:
         self.clear()
@@ -116,14 +136,10 @@ class ChatPane(QWidget):
         for turn in session.get("turns") or []:
             if not isinstance(turn, dict):
                 continue
-            user = _escape(str(turn.get("user") or ""))
-            answer = _escape(str(turn.get("answer") or ""))
-            parts.append(f"<p><b>你</b><br>{user}</p>")
-            parts.append(f"<p><b>助手</b><br>{answer}</p>")
+            parts.append(_bubble("user", "你", str(turn.get("user") or "")))
+            parts.append(_bubble("assistant", "助手", str(turn.get("answer") or "")))
             for ans in turn.get("ask_answers") or []:
-                parts.append(
-                    f"<p style='color:#666'><i>确认</i> {_escape(str(ans))}</p>"
-                )
+                parts.append(f"<div class='meta'>确认 · {_escape(str(ans))}</div>")
             changes = turn.get("changes") or []
             if changes:
                 parts.append(self._changes_html(changes, prefix=f"t{turn.get('index', 0)}"))
@@ -131,56 +147,65 @@ class ChatPane(QWidget):
             if detail:
                 key = f"detail-{turn.get('index')}"
                 parts.append(
-                    f"<p><a href='detail:{key}'>查看过程细节</a></p>"
+                    f"<div class='meta'><a href='detail:{key}'>查看过程细节</a></div>"
                 )
                 self._changes_by_key[key] = {"_detail": detail}
-        self.view.setHtml("".join(parts) or "<p style='color:#888'>新会话，发送第一条任务开始。</p>")
         plan = session.get("pending_plan")
         if isinstance(plan, dict) and plan.get("ok"):
             self._pending_plan = plan
             self.plan_widget.show()
-            summary = _escape(str(plan.get("summary") or plan.get("text") or "待确认计划")[:240])
-            cur = self.view.toHtml()
-            self.view.setHtml(cur + f"<p><b>待确认计划</b><br>{summary}</p>")
+            summary = _escape(
+                str(plan.get("summary") or plan.get("text") or "待确认计划")[:240]
+            )
+            parts.append(f"<div class='plan-box'><b>待确认计划</b><br>{summary}</div>")
         if session.get("pending_ask"):
             self.ask_widget.show()
+        self._body_parts = parts
+        if not parts:
+            self._body_parts = ["<div class='empty'>新会话 — 在下方描述任务开始</div>"]
         self.set_todos(session.get("todos"))
-        self._scroll_bottom()
+        self._paint()
 
     def begin_live(self, user_text: str) -> None:
-        self._live_html = ""
-        self._append_html(f"<p><b>你</b><br>{_escape(user_text)}</p>")
-        self._append_html("<div id='live'><p><b>助手 · 进行中</b></p></div>")
+        # drop empty placeholder
+        if (
+            len(self._body_parts) == 1
+            and "empty" in self._body_parts[0]
+        ):
+            self._body_parts = []
+        self._live_steps = []
+        self._body_parts.append(_bubble("user", "你", user_text))
+        self._body_parts.append(
+            "<div class='live' id='live'><div class='role'>助手 · 进行中</div></div>"
+        )
+        self._paint()
 
     def update_live_status(self, message: str) -> None:
-        self._set_live_body(f"<p style='color:#555'>{_escape(message)}</p>{self._format_live_steps()}")
+        inner = f"<div class='meta'>{_escape(message)}</div>{self._format_live_steps()}"
+        self._set_live_inner(inner)
 
     def update_live_steps(self, steps: list[dict[str, Any]]) -> None:
         self._live_steps = steps
-        body = "".join(self._step_html(s) for s in steps)
-        self._set_live_body(body or "<p style='color:#555'>…</p>")
-        # aggregate changes
         for step in steps:
             for ch in step.get("changes") or []:
-                if isinstance(ch, dict):
-                    path = str(ch.get("path") or "")
-                    if path:
-                        self._changes_by_key[f"live:{path}"] = ch
-        if any(step.get("changes") for step in steps):
-            all_ch: list[dict[str, Any]] = []
-            for step in steps:
-                all_ch.extend(c for c in (step.get("changes") or []) if isinstance(c, dict))
-            if all_ch:
-                self._set_live_body(
-                    "".join(self._step_html(s) for s in steps)
-                    + self._changes_html(all_ch, prefix="live")
-                )
+                if isinstance(ch, dict) and ch.get("path"):
+                    self._changes_by_key[f"live:{ch['path']}"] = ch
+        body = "".join(self._step_html(s) for s in steps)
+        all_ch: list[dict[str, Any]] = []
+        for step in steps:
+            all_ch.extend(c for c in (step.get("changes") or []) if isinstance(c, dict))
+        if all_ch:
+            body += self._changes_html(all_ch, prefix="live")
+        self._set_live_inner(body or "<div class='meta'>…</div>")
 
     def finish_live(self, answer: str, *, ok: bool = True) -> None:
+        # remove live block
+        self._body_parts = [p for p in self._body_parts if "id='live'" not in p]
         role = "助手" if ok else "错误"
-        self._append_html(f"<p><b>{role}</b><br>{_escape(answer)}</p>")
-        self._live_html = ""
+        cls = "assistant" if ok else "error"
+        self._body_parts.append(_bubble(cls, role, answer))
         self._live_steps = []
+        self._paint()
 
     def set_pending_plan(self, plan: dict[str, Any] | None) -> None:
         self._pending_plan = plan if isinstance(plan, dict) and plan.get("ok") else None
@@ -202,7 +227,6 @@ class ChatPane(QWidget):
             return
         self.todo_bar.setMaximum(max(total, 1))
         self.todo_bar.setValue(min(done, total))
-        self.todo_bar.setFormat(f"Todos {done}/{total}")
         current = ""
         for it in items:
             if isinstance(it, dict) and it.get("status") == "in_progress":
@@ -213,10 +237,10 @@ class ChatPane(QWidget):
                 if isinstance(it, dict) and it.get("status") not in {"done", "completed"}:
                     current = str(it.get("text") or it.get("title") or "")
                     break
-        self.todo_label.setText(current)
+        self.todo_label.setText(
+            f"进度 {done}/{total}" + (f"  ·  {current}" if current else "")
+        )
         self.todo_widget.show()
-
-    # --- internals ---
 
     def _emit_send(self) -> None:
         text = self.input.toPlainText().strip()
@@ -244,16 +268,16 @@ class ChatPane(QWidget):
                 self.detail_inspect_requested.emit(detail)
 
     def _changes_html(self, changes: list[dict[str, Any]], *, prefix: str) -> str:
-        bits = ["<p><b>文件改动</b><ul>"]
+        bits = ["<div class='changes'><b>文件改动</b><ul style='margin:6px 0 0 18px;padding:0'>"]
         for i, ch in enumerate(changes):
             path = str(ch.get("path") or "?")
             kind = str(ch.get("kind") or "")
             key = f"{prefix}:{path}:{i}"
             self._changes_by_key[key] = ch
             bits.append(
-                f"<li><a href='change:{key}'>[{_escape(kind)}] {_escape(path)}</a></li>"
+                f"<li><a href='change:{key}'>{_escape(kind)} · {_escape(path)}</a></li>"
             )
-        bits.append("</ul></p>")
+        bits.append("</ul></div>")
         return "".join(bits)
 
     def _step_html(self, step: dict[str, Any]) -> str:
@@ -261,10 +285,10 @@ class ChatPane(QWidget):
         thought = str(step.get("thought") or "").strip()
         actions = step.get("actions") or []
         final = str(step.get("final_answer") or "").strip()
-        parts = [f"<p><b>步骤 {idx}</b>"]
+        parts = [f"<div class='step'><div class='step-title'>步骤 {idx}</div>"]
         if thought:
             short = thought if len(thought) < 280 else thought[:280] + "…"
-            parts.append(f"<br><i>{_escape(short)}</i>")
+            parts.append(f"<div class='thought'>{_escape(short)}</div>")
         for act in actions:
             if not isinstance(act, dict):
                 continue
@@ -278,49 +302,48 @@ class ChatPane(QWidget):
                 chip += f" · {path}"
             ok = act.get("ok")
             mark = "✓" if ok else ("…" if ok is None else "✗")
-            parts.append(f"<br><code>{mark} {_escape(chip)}</code>")
+            parts.append(f"<span class='chip'>{mark} {_escape(chip)}</span>")
         if final:
-            parts.append(f"<br>{_escape(final)}")
-        parts.append("</p>")
+            parts.append(f"<div style='margin-top:6px'>{_escape(final)}</div>")
+        parts.append("</div>")
         return "".join(parts)
 
     def _format_live_steps(self) -> str:
-        return "".join(self._step_html(s) for s in getattr(self, "_live_steps", []) or [])
+        return "".join(self._step_html(s) for s in self._live_steps)
 
-    def _append_html(self, html: str) -> None:
-        cur = self.view.toHtml()
-        # crude append before closing body if present
-        if "</body>" in cur:
-            cur = cur.replace("</body>", html + "</body>")
-            self.view.setHtml(cur)
-        else:
-            self.view.setHtml(cur + html)
+    def _set_live_inner(self, inner: str) -> None:
+        live = (
+            "<div class='live' id='live'>"
+            "<div class='role'>助手 · 进行中</div>"
+            f"{inner}</div>"
+        )
+        replaced = False
+        for i, part in enumerate(self._body_parts):
+            if "id='live'" in part:
+                self._body_parts[i] = live
+                replaced = True
+                break
+        if not replaced:
+            self._body_parts.append(live)
+        self._paint()
+
+    def _paint(self) -> None:
+        self.view.setHtml(wrap_chat_html("".join(self._body_parts)))
         self._scroll_bottom()
-
-    def _set_live_body(self, inner: str) -> None:
-        # rewrite last live block by re-append strategy: keep history without live, then add live
-        # Simpler: just append status updates as paragraphs during run
-        self._live_html = inner
-        # Find marker — if missing, append
-        base = self.view.toHtml()
-        marker_start = base.rfind("<div id='live'>")
-        if marker_start >= 0:
-            marker_end = base.find("</div>", marker_start)
-            if marker_end >= 0:
-                new_html = (
-                    base[:marker_start]
-                    + f"<div id='live'><p><b>助手 · 进行中</b></p>{inner}</div>"
-                    + base[marker_end + 6 :]
-                )
-                self.view.setHtml(new_html)
-                self._scroll_bottom()
-                return
-        self._append_html(f"<div id='live'><p><b>助手 · 进行中</b></p>{inner}</div>")
 
     def _scroll_bottom(self) -> None:
         cursor = self.view.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         self.view.setTextCursor(cursor)
+
+
+def _bubble(cls: str, role: str, text: str) -> str:
+    return (
+        f"<div class='msg {cls}'>"
+        f"<div class='role'>{_escape(role)}</div>"
+        f"<div class='bubble'>{_escape(text)}</div>"
+        f"</div>"
+    )
 
 
 def _escape(text: str) -> str:

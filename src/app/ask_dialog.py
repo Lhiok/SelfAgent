@@ -23,16 +23,21 @@ class AskDialog(QDialog):
     def __init__(self, event: dict[str, Any], parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("需要你确认")
-        self.resize(480, 420)
+        self.resize(520, 460)
         self._event = event
         self._widgets: list[dict[str, Any]] = []
 
         root = QVBoxLayout(self)
+        root.setContentsMargins(18, 16, 18, 16)
+        root.setSpacing(12)
+        heading = QLabel("需要你确认")
+        heading.setObjectName("SessionTitle")
+        root.addWidget(heading)
         ctx = str(event.get("context") or "").strip()
         if ctx:
             tip = QLabel(ctx)
             tip.setWordWrap(True)
-            tip.setStyleSheet("color: #555;")
+            tip.setObjectName("StatusLabel")
             root.addWidget(tip)
 
         scroll = QScrollArea()

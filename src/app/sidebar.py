@@ -21,36 +21,44 @@ from PySide6.QtWidgets import (
 class Sidebar(QWidget):
     session_selected = Signal(str)
     add_workspace_requested = Signal()
-    new_session_requested = Signal(str)  # workspace_id
+    new_session_requested = Signal(str)
     refresh_requested = Signal()
-    session_patch_requested = Signal(str, dict)  # session_id, fields
-    workspace_patch_requested = Signal(str, dict)  # workspace_id, fields
+    session_patch_requested = Signal(str, dict)
+    workspace_patch_requested = Signal(str, dict)
 
     ROLE_KIND = Qt.ItemDataRole.UserRole
     ROLE_ID = Qt.ItemDataRole.UserRole + 1
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self.setObjectName("Sidebar")
         self._show_archived = False
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setContentsMargins(12, 14, 12, 12)
+        layout.setSpacing(10)
 
         head = QHBoxLayout()
-        head.addWidget(QLabel("工作区"), 1)
-        btn_add = QPushButton("+")
-        btn_add.setToolTip("添加工作目录")
-        btn_add.setFixedWidth(28)
-        btn_add.clicked.connect(self.add_workspace_requested.emit)
+        caption = QLabel("工作区")
+        caption.setObjectName("PanelCaption")
+        head.addWidget(caption, 1)
         self.btn_archive = QPushButton("归档")
+        self.btn_archive.setObjectName("GhostButton")
         self.btn_archive.setCheckable(True)
         self.btn_archive.setToolTip("显示已归档会话")
         self.btn_archive.toggled.connect(self._on_archive_toggled)
+        btn_add = QPushButton("+")
+        btn_add.setObjectName("IconButton")
+        btn_add.setToolTip("添加工作目录")
+        btn_add.clicked.connect(self.add_workspace_requested.emit)
         head.addWidget(self.btn_archive)
         head.addWidget(btn_add)
         layout.addLayout(head)
 
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
+        self.tree.setIndentation(16)
+        self.tree.setRootIsDecorated(True)
+        self.tree.setAnimated(True)
         self.tree.itemClicked.connect(self._on_click)
         self.tree.itemDoubleClicked.connect(self._on_double_click)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
@@ -88,11 +96,13 @@ class Sidebar(QWidget):
             ws_item = QTreeWidgetItem([_ws_label(ws)])
             ws_item.setData(0, self.ROLE_KIND, "workspace")
             ws_item.setData(0, self.ROLE_ID, ws["id"])
+            font = ws_item.font(0)
+            font.setBold(True)
+            ws_item.setFont(0, font)
             collapsed = bool(ws.get("collapsed"))
             self.tree.addTopLevelItem(ws_item)
             ws_item.setExpanded(not collapsed)
-            sessions = ws.get("sessions") or []
-            for sess in sessions:
+            for sess in ws.get("sessions") or []:
                 if sess.get("archived") and not self._show_archived:
                     continue
                 title = str(sess.get("title") or sess.get("preview") or "新对话")
@@ -180,4 +190,4 @@ def _ws_label(ws: dict[str, Any]) -> str:
     path = str(ws.get("path") or "")
     n = int(ws.get("session_count") or len(ws.get("sessions") or []))
     name = title or path or ws.get("id", "工作区")
-    return f"{name} ({n})"
+    return f"{name}  ·  {n}"

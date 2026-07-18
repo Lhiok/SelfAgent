@@ -18,10 +18,13 @@ def main(argv: list[str] | None = None) -> None:
         )
         raise SystemExit(1) from None
 
+    from app.theme import apply_theme
     from app.window import MainWindow
 
     qt_app = QApplication(argv)
     qt_app.setApplicationName("SelfAgent")
+    qt_app.setStyle("Fusion")
+    apply_theme(qt_app)
     win = MainWindow(config_path=_default_config())
     win.show()
     raise SystemExit(qt_app.exec())

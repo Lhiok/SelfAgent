@@ -19,26 +19,37 @@ from PySide6.QtWidgets import (
 class Inspector(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self.setObjectName("Inspector")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setContentsMargins(12, 14, 12, 12)
+        layout.setSpacing(10)
+        caption = QLabel("检视")
+        caption.setObjectName("PanelCaption")
         head = QHBoxLayout()
-        self.title = QLabel("检视")
+        self.title = QLabel("未选择")
+        self.title.setObjectName("SessionTitle")
         self.btn_open = QPushButton("打开文件")
+        self.btn_open.setObjectName("GhostButton")
         self.btn_open.setEnabled(False)
         self.btn_open.clicked.connect(self._open_path)
         head.addWidget(self.title, 1)
         head.addWidget(self.btn_open)
+        layout.addWidget(caption)
         layout.addLayout(head)
         self.view = QPlainTextEdit()
+        self.view.setObjectName("InspectorView")
         self.view.setReadOnly(True)
-        font = QFont("Consolas")
+        font = QFont("Cascadia Mono")
+        if not font.exactMatch():
+            font = QFont("Consolas")
         font.setStyleHint(QFont.StyleHint.Monospace)
+        font.setPointSize(10)
         self.view.setFont(font)
         layout.addWidget(self.view, 1)
         self._path: str | None = None
 
     def clear(self) -> None:
-        self.title.setText("检视")
+        self.title.setText("未选择")
         self.view.clear()
         self._path = None
         self.btn_open.setEnabled(False)
