@@ -211,7 +211,6 @@ class Sidebar(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("Sidebar")
-        self._show_archived = False
         self._current_session_id: str | None = None
         self._blocks: list[WorkspaceBlock] = []
 
@@ -223,16 +222,10 @@ class Sidebar(QWidget):
         caption = QLabel("仓库")
         caption.setObjectName("PanelCaption")
         head.addWidget(caption, 1)
-        self.btn_archive = QPushButton("归档")
-        self.btn_archive.setObjectName("GhostButton")
-        self.btn_archive.setCheckable(True)
-        self.btn_archive.setToolTip("显示已归档会话")
-        self.btn_archive.toggled.connect(self._on_archive_toggled)
         btn_add = QPushButton("+")
         btn_add.setObjectName("IconButton")
         btn_add.setToolTip("添加工作目录")
         btn_add.clicked.connect(self.add_workspace_requested.emit)
-        head.addWidget(self.btn_archive)
         head.addWidget(btn_add)
         layout.addLayout(head)
 
@@ -251,11 +244,8 @@ class Sidebar(QWidget):
         layout.addWidget(scroll, 1)
 
     def show_archived(self) -> bool:
-        return self._show_archived
-
-    def _on_archive_toggled(self, on: bool) -> None:
-        self._show_archived = on
-        self.refresh_requested.emit()
+        """兼容旧调用：不再提供“显示归档”开关，始终隐藏已归档会话。"""
+        return False
 
     def populate(self, workspaces: list[dict[str, Any]], current_session_id: str | None) -> None:
         self._current_session_id = current_session_id
@@ -268,11 +258,11 @@ class Sidebar(QWidget):
 
         for ws in workspaces:
             data = dict(ws)
-            sessions = []
-            for sess in ws.get("sessions") or []:
-                if sess.get("archived") and not self._show_archived:
-                    continue
-                sessions.append(sess)
+            sessions = [
+                sess
+                for sess in (ws.get("sessions") or [])
+                if not sess.get("archived")
+            ]
             data["sessions"] = sessions
             block = WorkspaceBlock(data, current_session_id)
             block.new_session.connect(self.new_session_requested.emit)

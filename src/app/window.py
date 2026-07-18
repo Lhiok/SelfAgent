@@ -119,14 +119,6 @@ class MainWindow(QMainWindow):
 
     def _refresh_sidebar(self) -> None:
         workspaces = self.store.list_workspaces(include_sessions=True)
-        if not self.sidebar.show_archived():
-            for ws in workspaces:
-                sess = [
-                    s
-                    for s in (ws.get("sessions") or [])
-                    if not s.get("archived")
-                ]
-                ws["sessions"] = sess
         self.sidebar.populate(workspaces, self._session_id)
 
     @Slot(str)
