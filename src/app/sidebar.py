@@ -38,7 +38,7 @@ class Sidebar(QWidget):
         layout.setSpacing(8)
 
         head = QHBoxLayout()
-        caption = QLabel("会话")
+        caption = QLabel("仓库")
         caption.setObjectName("PanelCaption")
         head.addWidget(caption, 1)
         self.btn_archive = QPushButton("归档")

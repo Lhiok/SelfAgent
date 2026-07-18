@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.theme import wrap_chat_html
+from app.theme import diff_line_stats, wrap_chat_html
 
 
 class ChatPane(QWidget):
@@ -35,8 +35,17 @@ class ChatPane(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
+        header = QWidget()
+        header.setObjectName("ChatHeader")
+        head_l = QHBoxLayout(header)
+        head_l.setContentsMargins(20, 10, 16, 10)
+        self.chat_title = QLabel("未选择会话")
+        self.chat_title.setObjectName("SessionTitle")
+        head_l.addWidget(self.chat_title, 1)
+        layout.addWidget(header)
+
         body = QVBoxLayout()
-        body.setContentsMargins(0, 8, 0, 0)
+        body.setContentsMargins(0, 4, 0, 0)
         body.setSpacing(8)
 
         self.todo_bar = QProgressBar()
@@ -109,8 +118,8 @@ class ChatPane(QWidget):
         composer.setContentsMargins(2, 2, 6, 2)
         composer.setSpacing(6)
         self.input = QTextEdit()
-        self.input.setPlaceholderText("输入任务…  Ctrl+Enter 发送")
-        self.input.setFixedHeight(72)
+        self.input.setPlaceholderText("发送后续消息…")
+        self.input.setFixedHeight(56)
         self.btn_send = QPushButton("发送")
         self.btn_send.setObjectName("PrimaryButton")
         self.btn_send.setMinimumWidth(72)
@@ -138,6 +147,9 @@ class ChatPane(QWidget):
 
     def set_status(self, text: str) -> None:
         self.status.setText(text)
+
+    def set_chat_title(self, title: str) -> None:
+        self.chat_title.setText(title or "未选择会话")
 
     def clear(self) -> None:
         self._body_parts = []
@@ -291,16 +303,27 @@ class ChatPane(QWidget):
                 self.detail_inspect_requested.emit(detail)
 
     def _changes_html(self, changes: list[dict[str, Any]], *, prefix: str) -> str:
-        bits = ["<div class='changes'><b>文件改动</b><ul style='margin:6px 0 0 18px;padding:0'>"]
+        n = len(changes)
+        bits = [
+            f"<div class='changes'><div class='changes-head'>"
+            f"{n} 个文件已更改</div>"
+        ]
         for i, ch in enumerate(changes):
             path = str(ch.get("path") or "?")
-            kind = str(ch.get("kind") or "")
             key = f"{prefix}:{path}:{i}"
             self._changes_by_key[key] = ch
+            plus, minus = diff_line_stats(str(ch.get("diff") or ""))
+            stats = ""
+            if plus:
+                stats += f"<span class='plus'>+{plus}</span>"
+            if minus:
+                stats += f"<span class='minus'>-{minus}</span>"
+            name = path.replace("\\", "/").split("/")[-1] or path
             bits.append(
-                f"<li><a href='change:{key}'>{_escape(kind)} · {_escape(path)}</a></li>"
+                f"<a class='change-row' href='change:{key}'>"
+                f"<span class='change-path'>{_escape(name)}</span>{stats}</a>"
             )
-        bits.append("</ul></div>")
+        bits.append("</div>")
         return "".join(bits)
 
     def _step_html(self, step: dict[str, Any]) -> str:

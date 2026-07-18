@@ -56,15 +56,13 @@ class MainWindow(QMainWindow):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        top_bar = QWidget()
-        top_bar.setObjectName("TopBar")
-        top = QHBoxLayout(top_bar)
-        top.setContentsMargins(12, 6, 12, 6)
-        top.setSpacing(8)
-        brand = QLabel("SelfAgent")
-        brand.setObjectName("BrandLabel")
-        self.title_label = QLabel("未选择会话")
-        self.title_label.setObjectName("SessionTitle")
+        # 工具条挂在中间栏标题旁：模式 / 细节 / 删除（整体布局仿 Agents 三栏）
+        split = QSplitter(Qt.Orientation.Horizontal)
+        split.setHandleWidth(1)
+        self.sidebar = Sidebar()
+        self.chat = ChatPane()
+        self.inspector = Inspector()
+
         self.workdir_label = QLabel("")
         self.workdir_label.setObjectName("WorkdirLabel")
         self.mode_combo = QComboBox()
@@ -78,27 +76,24 @@ class MainWindow(QMainWindow):
         self.btn_delete = QPushButton("删除")
         self.btn_delete.setObjectName("DangerButton")
         self.btn_delete.clicked.connect(self._delete_session)
-        top.addWidget(brand)
-        top.addWidget(self.title_label, 1)
-        top.addWidget(self.workdir_label)
-        top.addWidget(self.mode_combo)
-        top.addWidget(self.detail_combo)
-        top.addWidget(self.btn_delete)
-        outer.addWidget(top_bar)
+        header = self.chat.findChild(QWidget, "ChatHeader")
+        if header is not None:
+            hl = header.layout()
+            if hl is not None:
+                hl.addWidget(self.workdir_label)
+                hl.addWidget(self.mode_combo)
+                hl.addWidget(self.detail_combo)
+                hl.addWidget(self.btn_delete)
 
-        split = QSplitter(Qt.Orientation.Horizontal)
-        split.setHandleWidth(1)
-        self.sidebar = Sidebar()
-        self.chat = ChatPane()
-        self.inspector = Inspector()
         split.addWidget(self.sidebar)
         split.addWidget(self.chat)
         split.addWidget(self.inspector)
         split.setStretchFactor(0, 2)
-        split.setStretchFactor(1, 6)
-        split.setStretchFactor(2, 3)
-        split.setSizes([240, 680, 320])
+        split.setStretchFactor(1, 5)
+        split.setStretchFactor(2, 4)
+        split.setSizes([260, 560, 420])
         outer.addWidget(split, 1)
+        self.title_label = self.chat.chat_title
 
         self.sidebar.session_selected.connect(self._select_session)
         self.sidebar.add_workspace_requested.connect(self._add_workspace)
@@ -155,8 +150,11 @@ class MainWindow(QMainWindow):
 
     def _apply_session_header(self, session: dict[str, Any]) -> None:
         title = str(session.get("title") or session.get("preview") or "会话")
-        self.title_label.setText(title)
-        self.workdir_label.setText(str(session.get("workdir") or ""))
+        self.chat.set_chat_title(title)
+        wd = str(session.get("workdir") or "")
+        # 只显示目录名，避免顶栏过长
+        self.workdir_label.setText(Path(wd).name if wd else "")
+        self.workdir_label.setToolTip(wd)
         mode = str(session.get("mode") or "agent")
         detail = str(session.get("detail") or "off")
         self.mode_combo.blockSignals(True)
@@ -229,7 +227,7 @@ class MainWindow(QMainWindow):
         self._session_id = None
         self._session = None
         self.chat.clear()
-        self.title_label.setText("未选择会话")
+        self.chat.set_chat_title("未选择会话")
         self.workdir_label.setText("")
         self._refresh_sidebar()
 
