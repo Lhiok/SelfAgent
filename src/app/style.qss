@@ -109,25 +109,21 @@ QSplitter::handle:hover {
     color: #8A8A8A;
 }
 
-#ChevronButton, #WorkspacePlus {
+#WorkspacePlus {
     min-width: 24px;
     max-width: 24px;
     min-height: 24px;
     border: none;
     border-radius: 6px;
     color: #6B6B6B;
-    font-size: 14px;
+    font-size: 16px;
+    font-weight: 600;
     background: transparent;
 }
 
-#ChevronButton:hover, #WorkspacePlus:hover {
+#WorkspacePlus:hover {
     background: #DCDCD8;
     color: #1A1A1A;
-}
-
-#WorkspacePlus {
-    font-size: 16px;
-    font-weight: 600;
 }
 
 #SessionList {

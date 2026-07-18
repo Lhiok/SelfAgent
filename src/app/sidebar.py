@@ -104,14 +104,12 @@ class SessionRow(QFrame):
 class WorkspaceBlock(QWidget):
     new_session = Signal(str)
     rename = Signal(str)
-    collapse_changed = Signal(str, bool)
     session_clicked = Signal(str)
     session_star = Signal(str, bool)
 
     def __init__(self, ws: dict[str, Any], current_session_id: str | None, parent=None) -> None:
         super().__init__(parent)
         self.workspace_id = str(ws["id"])
-        self._collapsed = bool(ws.get("collapsed"))
         self.setObjectName("WorkspaceBlock")
 
         root = QVBoxLayout(self)
@@ -125,13 +123,6 @@ class WorkspaceBlock(QWidget):
         h = QHBoxLayout(header)
         h.setContentsMargins(6, 6, 4, 6)
         h.setSpacing(8)
-
-        self.chevron = QToolButton()
-        self.chevron.setObjectName("ChevronButton")
-        self.chevron.setAutoRaise(True)
-        self.chevron.setText("▸" if self._collapsed else "▾")
-        self.chevron.clicked.connect(self._toggle_collapse)
-        h.addWidget(self.chevron)
 
         icon = QLabel("📁")
         icon.setObjectName("FolderIcon")
@@ -191,13 +182,6 @@ class WorkspaceBlock(QWidget):
 
         self._sess_layout.addStretch(0)
         root.addWidget(self.sessions_wrap)
-        self.sessions_wrap.setVisible(not self._collapsed)
-
-    def _toggle_collapse(self) -> None:
-        self._collapsed = not self._collapsed
-        self.chevron.setText("▸" if self._collapsed else "▾")
-        self.sessions_wrap.setVisible(not self._collapsed)
-        self.collapse_changed.emit(self.workspace_id, self._collapsed)
 
 
 class Sidebar(QWidget):
@@ -267,7 +251,6 @@ class Sidebar(QWidget):
             block = WorkspaceBlock(data, current_session_id)
             block.new_session.connect(self.new_session_requested.emit)
             block.rename.connect(self._rename_workspace)
-            block.collapse_changed.connect(self._on_collapse)
             block.session_clicked.connect(self.session_selected.emit)
             block.session_star.connect(self._on_star)
             self._list_layout.addWidget(block)
@@ -278,9 +261,6 @@ class Sidebar(QWidget):
         title, ok = QInputDialog.getText(self, "重命名工作区", "显示名称")
         if ok and title.strip():
             self.workspace_patch_requested.emit(workspace_id, {"title": title.strip()})
-
-    def _on_collapse(self, workspace_id: str, collapsed: bool) -> None:
-        self.workspace_patch_requested.emit(workspace_id, {"collapsed": collapsed})
 
     def _on_star(self, session_id: str, starred: bool) -> None:
         self.session_patch_requested.emit(session_id, {"starred": starred})
