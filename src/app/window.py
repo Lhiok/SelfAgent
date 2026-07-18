@@ -11,7 +11,6 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QMainWindow,
-    QMessageBox,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -20,6 +19,7 @@ from PySide6.QtWidgets import (
 import config as cfg
 from app.ask_dialog import AskDialog
 from app.chat_pane import ChatPane
+from app.dialogs import ask_confirm, show_info, show_warning
 from app.inspector import Inspector
 from app.sidebar import Sidebar
 from app.store import WorkspaceStore
@@ -108,12 +108,12 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def _select_session(self, session_id: str) -> None:
         if self._busy:
-            QMessageBox.information(self, "请稍候", "当前任务仍在运行")
+            show_info(self, "请稍候", "当前任务仍在运行")
             return
         try:
             detail = self.store.get_session(session_id)
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(self, "加载失败", str(exc))
+            show_warning(self, "加载失败", str(exc))
             return
         self._session_id = session_id
         self._session = detail
@@ -142,7 +142,7 @@ class MainWindow(QMainWindow):
         try:
             ws = self.store.add_workspace(path, title=title.strip() if ok and title.strip() else None)
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(self, "添加失败", str(exc))
+            show_warning(self, "添加失败", str(exc))
             return
         self._refresh_sidebar()
         self._new_session(ws["id"])
@@ -154,7 +154,7 @@ class MainWindow(QMainWindow):
         try:
             summary = self.store.create_session(workspace_id)
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(self, "创建失败", str(exc))
+            show_warning(self, "创建失败", str(exc))
             return
         self._refresh_sidebar()
         self._select_session(summary["session_id"])
@@ -164,7 +164,7 @@ class MainWindow(QMainWindow):
         try:
             self.store.patch_session(session_id, **fields)
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(self, "更新失败", str(exc))
+            show_warning(self, "更新失败", str(exc))
             return
         archived = bool(fields.get("archived"))
         self._refresh_sidebar()
@@ -179,7 +179,7 @@ class MainWindow(QMainWindow):
         try:
             self.store.patch_workspace(workspace_id, **fields)
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(self, "更新失败", str(exc))
+            show_warning(self, "更新失败", str(exc))
             return
         self._refresh_sidebar()
 
@@ -195,19 +195,16 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def _delete_session_by_id(self, session_id: str) -> None:
         if self._busy:
-            QMessageBox.information(self, "请稍候", "当前任务仍在运行")
+            show_info(self, "请稍候", "当前任务仍在运行")
             return
         if not session_id:
             return
-        if (
-            QMessageBox.question(self, "删除会话", "确定删除该对话？")
-            != QMessageBox.StandardButton.Yes
-        ):
+        if not ask_confirm(self, "删除会话", "确定删除该对话？"):
             return
         try:
             self.store.delete_session(session_id)
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(self, "删除失败", str(exc))
+            show_warning(self, "删除失败", str(exc))
             return
         if session_id == self._session_id:
             self._clear_current_session()
@@ -220,7 +217,7 @@ class MainWindow(QMainWindow):
             detail = self.store.patch_session(self._session_id, mode=mode)
             self._session = detail
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(self, "切换失败", str(exc))
+            show_warning(self, "切换失败", str(exc))
 
     # ---------- run ----------
 
@@ -310,7 +307,7 @@ class MainWindow(QMainWindow):
         if not event:
             event = self.store.get_pending_ask(self._session_id)
         if not event:
-            QMessageBox.information(self, "确认", "当前没有待确认的提问")
+            show_info(self, "确认", "当前没有待确认的提问")
             self.chat.set_ask_visible(False)
             return
         dlg = AskDialog(event, self)
@@ -333,15 +330,19 @@ class MainWindow(QMainWindow):
                     raw=dlg.raw_fallback(),
                 )
             except Exception as exc2:  # noqa: BLE001
-                QMessageBox.warning(self, "提交失败", f"{exc}\n{exc2}")
+                show_warning(self, "提交失败", f"{exc}\n{exc2}")
                 return
         self._pending_ask = None
         self.chat.set_ask_visible(False)
         self.chat.set_status("已提交确认，继续处理…")
 
-    @Slot(dict)
-    def _show_change(self, change: dict) -> None:
+    @Slot(dict, list)
+    def _show_change(self, change: dict, group: list | None = None) -> None:
         workdir = ""
         if self._session:
             workdir = str(self._session.get("workdir") or "")
-        self.inspector.show_change(change, workdir=workdir)
+        self.inspector.show_change(
+            change,
+            group=list(group or [change]),
+            workdir=workdir,
+        )

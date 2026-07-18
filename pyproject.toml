@@ -24,6 +24,7 @@ skills = [
 ]
 app = [
     "PySide6>=6.6.0",
+    "markdown>=3.5",
 ]
 all = [
     "selfagent[dev,skills,app]",
