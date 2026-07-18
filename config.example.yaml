@@ -59,6 +59,9 @@ react:
       diff_review: [review]
       todo_tracker: [list]
       screenshot: [read]
+      nodejs: [version]
+      python: [version, compile]
+      csharp: [version]
     # Plan Mode 下额外允许的交互 / 通知 Skill
     allow_skills:
       - ask_user
@@ -110,6 +113,19 @@ skills:
   dotnet_build:
     enabled: true
     timeout: 180
+  nodejs:
+    enabled: true
+    # npm | pnpm | yarn
+    package_manager: npm
+    timeout: 180
+  python:
+    enabled: true
+    # 空则使用当前进程解释器（venv 友好）
+    # python_bin: python
+    timeout: 180
+  csharp:
+    enabled: true
+    timeout: 180
   web_fetch:
     enabled: true
     # true 时允许访问内网（有 SSRF 风险，默认关闭）
@@ -158,6 +174,12 @@ permission:
           actions: [list]
         screenshot:
           actions: [read]
+        nodejs:
+          actions: [version]
+        python:
+          actions: [version, compile]
+        csharp:
+          actions: [version]
         ask_user: true
         request_capability: true
         feishu_notify:
@@ -178,6 +200,12 @@ permission:
           actions: [text, markdown]
         dotnet_build:
           actions: [build, test, restore]
+        nodejs:
+          actions: [install, test, build, script, run, version]
+        python:
+          actions: [run, test, install, module, compile, version]
+        csharp:
+          actions: [restore, build, test, run, format, version]
         web_fetch:
           actions: [fetch]
         http_request:

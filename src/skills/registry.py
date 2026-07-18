@@ -12,12 +12,15 @@ from permission import PermissionGuard
 from skills.ask_user import AskUserSkill
 from skills.base import Skill, SkillResult
 from skills.browser import BrowserSkill
+from skills.csharp import CsharpSkill
 from skills.diff_review import DiffReviewSkill
 from skills.dotnet_build import DotnetBuildSkill
 from skills.feishu_notify import FeishuNotifySkill
 from skills.git_ops import GitOpsSkill
 from skills.http_request import HttpRequestSkill
 from skills.local_file import LocalFileSkill
+from skills.nodejs import NodejsSkill
+from skills.python_lang import PythonSkill
 from skills.request_capability import RequestCapabilitySkill
 from skills.screenshot import ScreenshotSkill
 from skills.search_code import SearchCodeSkill
@@ -210,6 +213,43 @@ class SkillRegistry:
                     dotnet_bin=str(db_cfg.get("dotnet_bin") or "dotnet"),
                     default_timeout=float(db_cfg.get("timeout", 180)),
                     max_output_chars=int(db_cfg.get("max_output_chars", 30000)),
+                    enabled=True,
+                )
+            )
+
+        nj_cfg = section.get("nodejs") or {}
+        if bool(nj_cfg.get("enabled", True)):
+            registry.register(
+                NodejsSkill(
+                    root=nj_cfg.get("root", root),
+                    node_bin=str(nj_cfg.get("node_bin") or "node"),
+                    default_pm=str(nj_cfg.get("package_manager") or "npm"),
+                    default_timeout=float(nj_cfg.get("timeout", 180)),
+                    max_output_chars=int(nj_cfg.get("max_output_chars", 30000)),
+                    enabled=True,
+                )
+            )
+
+        py_cfg = section.get("python") or {}
+        if bool(py_cfg.get("enabled", True)):
+            registry.register(
+                PythonSkill(
+                    root=py_cfg.get("root", root),
+                    python_bin=py_cfg.get("python_bin"),
+                    default_timeout=float(py_cfg.get("timeout", 180)),
+                    max_output_chars=int(py_cfg.get("max_output_chars", 30000)),
+                    enabled=True,
+                )
+            )
+
+        cs_cfg = section.get("csharp") or {}
+        if bool(cs_cfg.get("enabled", True)):
+            registry.register(
+                CsharpSkill(
+                    root=cs_cfg.get("root", root),
+                    dotnet_bin=str(cs_cfg.get("dotnet_bin") or "dotnet"),
+                    default_timeout=float(cs_cfg.get("timeout", 180)),
+                    max_output_chars=int(cs_cfg.get("max_output_chars", 30000)),
                     enabled=True,
                 )
             )

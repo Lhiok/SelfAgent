@@ -105,7 +105,7 @@ python examples/chat_session.py --workdir D:\my-project
 
 ## 工作目录
 
-Agent 可设定工作目录，并同步到带 `root` 的 Skill（如 `local_file` / `search_code` / `shell_run` / `git_ops` / `dotnet_build` / `diff_review` / `todo_tracker` / `screenshot` / `browser`）：
+Agent 可设定工作目录，并同步到带 `root` 的 Skill（如 `local_file` / `search_code` / `shell_run` / `git_ops` / `dotnet_build` / `nodejs` / `python` / `csharp` / `diff_review` / `todo_tracker` / `screenshot` / `browser`）：
 
 ```python
 agent = ReActAgent(workdir="/path/to/project")
@@ -345,6 +345,25 @@ Git 仓库操作。默认只读；`allow_write: true` 后才可 `add`/`commit`�
 {"action":"build","project":"MyApp.sln","configuration":"Debug"}
 {"action":"test","cwd":"src/MyApp.Tests"}
 ```
+
+## Skill：nodejs / python / csharp
+
+三种语言的专用工具链（比通用 `shell_run` 更安全、语义更清晰）。
+
+| Skill | 常用 action |
+|--------|-------------|
+| `nodejs` | `install` / `test` / `build` / `script` / `run` / `version` |
+| `python` | `run` / `test` / `install` / `module` / `compile` / `version` |
+| `csharp` | `restore` / `build` / `test` / `run` / `format` / `version` |
+
+```json
+{"action":"test","cwd":"."}
+{"action":"run","file":"scripts/hello.py"}
+{"action":"script","script":"lint","package_manager":"npm"}
+{"action":"build","project":"App.sln","configuration":"Release"}
+```
+
+`csharp` 覆盖 run/format；轻量编译仍可用 `dotnet_build`。
 
 ## Skill：web_fetch / http_request
 
