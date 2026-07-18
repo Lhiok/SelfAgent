@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any, Iterable
 
 import config as cfg
@@ -24,9 +25,22 @@ class SkillRegistry:
     def __init__(self, permission: PermissionGuard | None = None) -> None:
         self._skills: dict[str, Skill] = {}
         self.permission = permission
+        self.workdir: Path | None = None
 
     def set_permission(self, permission: PermissionGuard | None) -> None:
         self.permission = permission
+
+    def set_workdir(self, workdir: str | Path) -> Path:
+        """将带 root 的 Skill 统一切到新工作目录。"""
+        path = Path(workdir).expanduser().resolve()
+        if not path.is_dir():
+            raise NotADirectoryError(f"工作目录不存在或不是目录: {path}")
+        self.workdir = path
+        for skill in self._skills.values():
+            if hasattr(skill, "root"):
+                skill.root = path
+                logger.notice(f"Skill {skill.name} root -> {path}")
+        return path
 
     def register(self, skill: Skill) -> None:
         self._skills[skill.name] = skill
@@ -100,6 +114,7 @@ class SkillRegistry:
         *,
         permission: PermissionGuard | None = None,
         load_permission: bool = True,
+        workdir: str | Path | None = None,
     ) -> "SkillRegistry":
         guard = permission
         if guard is None and load_permission:
@@ -112,11 +127,14 @@ class SkillRegistry:
         if skills is not None:
             for skill in skills:
                 registry.register(skill)
+            if workdir not in (None, ""):
+                registry.set_workdir(workdir)
             return registry
 
         section = cfg.get_section("skills", {}) or {}
         lf = section.get("local_file") or {}
-        root = lf.get("root", ".")
+        root = workdir if workdir not in (None, "") else lf.get("root", ".")
+        registry.workdir = Path(root).expanduser().resolve()
         registry.register(
             LocalFileSkill(
                 root=root,

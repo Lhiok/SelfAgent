@@ -179,6 +179,10 @@ class Conversation:
         """切换过程细节级别：off / summary / full。"""
         self.agent.set_detail(level)
 
+    def set_workdir(self, workdir: str | Path):
+        """设定 Agent 工作目录。"""
+        return self.agent.set_workdir(workdir)
+
     def state(self) -> ConversationState:
         return ConversationState(
             session_id=self.session_id,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
 import config as cfg
@@ -153,6 +154,7 @@ class ReActAgent:
         stream_detail: bool | None = None,
         detail_max_chars: int | None = None,
         on_detail: DetailHandler | None = None,
+        workdir: str | Path | None = None,
     ) -> None:
         react_cfg = cfg.get_section("react", {}) or {}
         plan_cfg = react_cfg.get("plan") or {}
@@ -173,11 +175,22 @@ class ReActAgent:
             except Exception:  # noqa: BLE001
                 self.permission = PermissionGuard.allow_all()
 
-        self.skills = skills or SkillRegistry.from_config(
-            permission=self.permission,
-            load_permission=False,
-        )
+        raw_workdir = workdir if workdir is not None else react_cfg.get("workdir")
+        if isinstance(raw_workdir, str) and not raw_workdir.strip():
+            raw_workdir = None
+
+        if skills is None:
+            self.skills = SkillRegistry.from_config(
+                permission=self.permission,
+                load_permission=False,
+                workdir=raw_workdir,
+            )
+        else:
+            self.skills = skills
+            if raw_workdir is not None:
+                self.skills.set_workdir(raw_workdir)
         self.skills.set_permission(self.permission)
+        self.workdir = self._infer_workdir()
 
         configured_mode = mode if mode is not None else react_cfg.get("mode", AgentMode.AGENT.value)
         self.mode = AgentMode.parse(configured_mode)
@@ -222,20 +235,22 @@ class ReActAgent:
         )
         self.on_detail = on_detail
 
-        base_prompt = system_prompt or react_cfg.get("system_prompt") or DEFAULT_SYSTEM_PROMPT
-        if self.mode is AgentMode.PLAN:
-            base_prompt = f"{base_prompt.strip()}\n\n{PLAN_SYSTEM_PROMPT.strip()}"
-
-        self.system_prompt = (
-            f"{base_prompt.strip()}\n\n"
-            f"当前模式: {self.mode.value}\n"
-            f"当前权限角色: {self.permission.role}\n"
-            f"可用工具:\n{self.skills.list_schemas(self.permission)}"
-        )
+        self._system_prompt_base = str(
+            system_prompt or react_cfg.get("system_prompt") or DEFAULT_SYSTEM_PROMPT
+        ).strip()
+        self.system_prompt = self._format_runtime_prompt(self.mode)
 
     def set_detail(self, level: str) -> None:
         """运行时切换细节级别：off / summary / full。"""
         self.detail = parse_detail_level(level)
+
+    def set_workdir(self, workdir: str | Path) -> Path:
+        """设定 Agent 工作目录，并同步到 local_file / search_code / shell_run / git_ops。"""
+        path = self.skills.set_workdir(workdir)
+        self.workdir = path
+        self.system_prompt = self._format_runtime_prompt(self.mode)
+        logger.notice(f"Agent 工作目录: {path}")
+        return path
 
     def with_mode(self, mode: str | AgentMode) -> "ReActAgent":
         """切换模式（返回新实例，复用 ai/skills/permission）。"""
@@ -252,7 +267,8 @@ class ReActAgent:
             stream_detail=self.stream_detail,
             detail_max_chars=self.detail_max_chars,
             on_detail=self.on_detail,
-            system_prompt=None,
+            workdir=self.workdir,
+            system_prompt=self._system_prompt_base,
         )
 
     def run(self, task: str, *, history: list[AIMessage] | None = None) -> ReActResult:
@@ -401,17 +417,28 @@ class ReActAgent:
             system_prompt=self._build_prompt(AgentMode.AGENT),
         )
 
-    def _build_prompt(self, mode: AgentMode) -> str:
-        react_cfg = cfg.get_section("react", {}) or {}
-        base_prompt = react_cfg.get("system_prompt") or DEFAULT_SYSTEM_PROMPT
+    def _infer_workdir(self) -> Path:
+        if self.skills.workdir is not None:
+            return self.skills.workdir
+        local = self.skills.get("local_file")
+        if local is not None and hasattr(local, "root"):
+            return Path(local.root).resolve()
+        return Path.cwd().resolve()
+
+    def _format_runtime_prompt(self, mode: AgentMode) -> str:
+        base_prompt = self._system_prompt_base
         if mode is AgentMode.PLAN:
-            base_prompt = f"{str(base_prompt).strip()}\n\n{PLAN_SYSTEM_PROMPT.strip()}"
+            base_prompt = f"{base_prompt}\n\n{PLAN_SYSTEM_PROMPT.strip()}"
         return (
-            f"{str(base_prompt).strip()}\n\n"
+            f"{base_prompt}\n\n"
             f"当前模式: {mode.value}\n"
+            f"当前工作目录: {self.workdir}\n"
             f"当前权限角色: {self.permission.role}\n"
             f"可用工具:\n{self.skills.list_schemas(self.permission)}"
         )
+
+    def _build_prompt(self, mode: AgentMode) -> str:
+        return self._format_runtime_prompt(mode)
 
     def _run_loop(
         self,

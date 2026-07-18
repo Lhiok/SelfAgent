@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 import sys
 
@@ -16,16 +17,27 @@ from skills import SkillRegistry
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="SelfAgent 连续对话")
+    parser.add_argument(
+        "--workdir",
+        "-C",
+        default=None,
+        help="Agent 工作目录（文件/搜索/命令/Git 的 root）",
+    )
+    args = parser.parse_args()
+
     cfg.load_config(ROOT / "config.yaml")
     reset_logger()  # 确保按当前配置生成本次运行日志文件
     agent = ReActAgent(
-        skills=SkillRegistry.from_config(),
+        skills=SkillRegistry.from_config(workdir=args.workdir),
         permission=PermissionGuard.from_config(),
         mode=AgentMode.AGENT,
+        workdir=args.workdir,
     )
     conv = Conversation(agent)
-    print("连续对话已启动。命令: /plan /agent /confirm /detail /reset /quit")
+    print("连续对话已启动。命令: /plan /agent /confirm /detail /workdir /reset /quit")
     print(f"当前细节级别: {agent.detail}（可用 /detail off|summary|full）")
+    print(f"工作目录: {agent.workdir}（可用 /workdir <路径>）")
     run_log = get_run_log_path()
     if run_log is not None:
         print(f"本次运行日志: {run_log}")
@@ -63,6 +75,19 @@ def main() -> None:
                 print(exc)
                 continue
             print(f"已切换细节级别: {conv.agent.detail}")
+            continue
+        if text == "/workdir" or text.startswith("/workdir "):
+            parts = text.split(maxsplit=1)
+            if len(parts) == 1:
+                print(f"当前工作目录: {conv.agent.workdir}")
+                print("用法: /workdir <路径>")
+                continue
+            try:
+                path = conv.set_workdir(parts[1])
+            except (OSError, ValueError) as exc:
+                print(f"切换失败: {exc}")
+                continue
+            print(f"已切换工作目录: {path}")
             continue
         if text == "/confirm":
             try:

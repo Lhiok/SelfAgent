@@ -33,6 +33,8 @@ react:
   # 默认模式：agent（直接执行）| plan（先规划）
   mode: agent
   max_steps: 12
+  # 可选：Agent 工作目录（local_file / search_code / shell_run / git_ops 的 root）
+  # workdir: "."
   # 过程细节：off（仅最终答案）| summary（Thought+Action）| full（含 Input/Observation）
   detail: off
   # detail != off 时是否在每轮执行中实时打印

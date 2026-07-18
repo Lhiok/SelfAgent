@@ -66,7 +66,11 @@ client = create_ai_client("deepseek")
 print(client.ask("用一句话介绍你自己"))
 
 # ReAct + Skill（受 permission 角色限权）
-agent = ReActAgent(skills=SkillRegistry.from_config(), role="readonly")
+agent = ReActAgent(
+    skills=SkillRegistry.from_config(),
+    role="readonly",
+    workdir=".",  # 可选：文件/搜索/命令/Git 的工作根目录
+)
 result = agent.run("查看当前目录有哪些文件")
 print(result.answer)
 # 打开细节后可看每轮 Thought/Action/Observation：
@@ -77,7 +81,20 @@ print(result.answer)
 
 ```bash
 python examples/quickstart.py
+python examples/chat_session.py --workdir D:\my-project
 ```
+
+## 工作目录
+
+Agent 可设定工作目录，并同步到 `local_file` / `search_code` / `shell_run` / `git_ops` 的 `root`：
+
+```python
+agent = ReActAgent(workdir="/path/to/project")
+agent.set_workdir("./other")       # 运行时切换
+conv.set_workdir("./other")        # Conversation
+```
+
+可选配置 `react.workdir`；`chat_session` 支持 `--workdir` / `-C` 与命令 `/workdir <路径>`。
 
 ## 运行日志隔离
 
