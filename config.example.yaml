@@ -1,0 +1,127 @@
+# 复制为 config.yaml 后按需修改
+# 各模块配置写在对应节下，便于维护；系统/用户环境变量仍可作为缺省回退
+
+log:
+  # 默认最低输出等级：notice | warning | critical
+  level: notice
+  # 启用的输出模式：console | file | server
+  modes:
+    - console
+    - file
+  file:
+    path: logs/app.log
+    encoding: utf-8
+  server:
+    url: ""
+    timeout: 5.0
+
+ai:
+  default_provider: deepseek
+  deepseek:
+    api_key: ""
+    base_url: "https://api.deepseek.com"
+    model: "deepseek-chat"
+    timeout: 60.0
+
+feishu:
+  webhook_url: ""
+
+react:
+  # 默认模式：agent（直接执行）| plan（先规划）
+  mode: agent
+  max_steps: 12
+  conversation:
+    # 连续对话保留的最大消息条数（不含 system）
+    max_history_messages: 40
+    # 是否在后续轮次注入“连续对话”提示
+    inject_hint: true
+    # 非空则每轮自动持久化到该目录
+    persist_dir: ""
+  plan:
+    # Plan Mode 下是否允许只读工具探测
+    allow_readonly_tools: true
+    readonly_actions:
+      local_file: [list, read]
+      search_code: [search]
+      git_ops: [status, diff, log, branch, show]
+    # Plan Mode 下额外允许的交互 / 通知 Skill
+    allow_skills:
+      - ask_user
+      - feishu_notify
+  system_prompt: |
+    你是一个可调用工具的助手。请严格使用 ReAct 格式回复：
+    Thought: 思考下一步
+    Action: 工具名
+    Action Input: 工具参数（JSON）
+    或在完成时输出：
+    Thought: 已得到答案
+    Final Answer: 最终结果
+
+    可以在同一次回复中连续输出多个 Action / Action Input（按顺序执行）。
+    工具之间互不依赖时可一次规划多个调用；需要上一步结果时再分步调用。
+
+skills:
+  local_file:
+    # 允许读写的根目录，默认当前工作目录
+    root: "."
+    allow_write: true
+  ask_user:
+    # 向用户提问选型（Plan Mode 落地前确认）
+    enabled: true
+  search_code:
+    enabled: true
+    # root 默认沿用 local_file.root
+  shell_run:
+    # 受控命令执行；未写 allow_commands 时使用代码内默认白名单
+    enabled: true
+    timeout: 60
+  feishu_notify:
+    enabled: true
+  git_ops:
+    enabled: true
+    # false=仅只读；true 允许 add/commit
+    allow_write: false
+    timeout: 60
+
+permission:
+  # 是否启用权限控制（对 ReAct 调用 Skill 限权）
+  enabled: true
+  # 未命中规则时的默认策略：deny | allow
+  default_effect: deny
+  # 当前生效角色
+  role: editor
+  roles:
+    readonly:
+      skills:
+        local_file:
+          actions: [list, read]
+        search_code:
+          actions: [search]
+        git_ops:
+          actions: [status, diff, log, branch, show]
+        ask_user: true
+        feishu_notify:
+          actions: [text, markdown]
+    editor:
+      skills:
+        local_file:
+          actions: [list, read, write, patch, move]
+        search_code:
+          actions: [search]
+        git_ops:
+          actions: [status, diff, log, branch, show, add, commit]
+        ask_user: true
+        shell_run:
+          actions: [run]
+        feishu_notify:
+          actions: [text, markdown]
+    admin:
+      skills:
+        "*":
+          actions: "*"
+
+regression:
+  # 是否默认跑需要真实密钥的在线用例（DeepSeek / 飞书）
+  include_live: false
+  # 为空或省略表示全部模块；也可限定：env, log, skills, react, ai, feishu, permission
+  modules: []
