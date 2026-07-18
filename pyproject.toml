@@ -17,22 +17,17 @@ dependencies = [
 dev = [
     "pytest>=8.0",
 ]
-ui = [
-    "fastapi>=0.115.0",
-    "uvicorn[standard]>=0.30.0",
-]
 skills = [
     "mss>=9.0.0",
     "Pillow>=10.0.0",
     "playwright>=1.40.0",
 ]
 all = [
-    "selfagent[dev,ui,skills]",
+    "selfagent[dev,skills]",
 ]
 
 [project.scripts]
 selfagent-regression = "regression.__main__:main"
-selfagent-ui = "web.__main__:main"
 
 [tool.setuptools]
 py-modules = ["config"]
@@ -42,9 +37,6 @@ py-modules = ["config"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.setuptools.package-data]
-web = ["static/*", "static/vendor/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

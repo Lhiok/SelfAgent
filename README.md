@@ -19,12 +19,21 @@ SelfAgent：面向各类项目的 Python 智能体基础框架，按层解耦：
 cd SelfAgent
 python -m venv .venv
 .venv\Scripts\activate
-pip install -e ".[dev,ui,skills]"
+pip install -e ".[dev,skills]"
 playwright install chromium
 copy config.example.yaml config.yaml
 ```
 
-可选 extra：`dev`（pytest）、`ui`（Web 工作台）、`skills`（截屏 mss/Pillow + 浏览器 Playwright）。也可一次装全：`pip install -e ".[all]"`。
+可选 extra：`dev`（pytest）、`skills`（截屏 mss/Pillow + 浏览器 Playwright）。也可一次装全：`pip install -e ".[all]"`。
+
+本仓库按产品线分分支：
+
+| 分支 | 用途 |
+|------|------|
+| `main` | 通用核心（当前） |
+| `web` | 浏览器工作台 |
+| `cli` | 命令行交互 |
+| `app` | Windows 独立窗口应用 |
 
 在对应模块节中配置（比集中写在 `env` 更易维护）：
 
@@ -43,21 +52,11 @@ feishu:
 
 未填写时，仍可回退到同名系统/用户环境变量（如 `DEEPSEEK_API_KEY`）。
 
-## 本地对话工作台
+## 端侧入口（其它分支）
 
-浏览器 UI：对话归在工作目录下的树形侧栏（可折叠、收藏、归档）。
-
-```bash
-pip install -e ".[ui]"
-python -m web
-# 或: selfagent-ui
-# 打开 http://127.0.0.1:8787
-```
-
-- 左侧：工作目录 → 其下对话；目录可折叠；对话可收藏（置顶）/ 归档（「归档」按钮显示）
-- 中间聊天：运行中实时显示思考 / 工具步骤；文件改动以列表展示，点击后在右侧面板查看 diff；路径可点 `vscode://` 用 VS Code 打开
-- 可切换 Agent / Plan、细节级别；Plan 待确认时在回复内点「确认执行」，「查看细节」在右侧面板展示计划
-- 会话落盘：`logs/workspaces/<id>/sessions/`
+- **浏览器工作台**：`git checkout web` 后见该分支 README（`pip install -e ".[ui]"` → `python -m web`）
+- **命令行 CLI**：`git checkout cli` 后使用 `selfagent-cli` / `python -m cli`
+- **Windows 桌面应用**：`git checkout app` 后使用 `selfagent-app` / `python -m app`
 
 ## 快速使用
 
