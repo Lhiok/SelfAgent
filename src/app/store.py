@@ -86,7 +86,7 @@ class WorkspaceStore:
             if include_sessions:
                 item["sessions"] = sessions
             items.append(item)
-        items.sort(key=lambda x: x.get("updated_at") or x.get("created_at") or "", reverse=True)
+        # 保持 index.workspace_ids 注册顺序，避免因会话活动更新 updated_at 而乱跳
         return items
 
     def add_workspace(self, path: str, *, title: str | None = None) -> dict[str, Any]:
