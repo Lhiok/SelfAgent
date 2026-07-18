@@ -78,32 +78,118 @@ QSplitter::handle:hover {
     border-bottom: 1px solid #E5E5E2;
 }
 
-/* ——— Tree ——— */
-QTreeWidget {
+/* ——— Sidebar list (custom rows) ——— */
+#SidebarScroll, #SidebarList {
     background: transparent;
     border: none;
-    color: #2A2A2A;
-    padding: 2px 4px;
 }
 
-QTreeWidget::item {
-    min-height: 28px;
-    padding: 4px 8px;
+#WorkspaceHeader {
+    background: transparent;
     border-radius: 8px;
-    margin: 1px 2px;
 }
 
-QTreeWidget::item:hover {
+#WorkspaceHeader:hover {
     background: #E6E6E3;
 }
 
-QTreeWidget::item:selected {
-    background: #E0E0DC;
+#FolderIcon {
+    font-size: 15px;
+    padding-top: 1px;
+}
+
+#WorkspaceName {
+    font-size: 13px;
+    font-weight: 600;
     color: #1A1A1A;
 }
 
-QTreeWidget::branch {
+#WorkspacePath {
+    font-size: 10px;
+    color: #8A8A8A;
+}
+
+#ChevronButton, #WorkspacePlus {
+    min-width: 24px;
+    max-width: 24px;
+    min-height: 24px;
+    border: none;
+    border-radius: 6px;
+    color: #6B6B6B;
+    font-size: 14px;
     background: transparent;
+}
+
+#ChevronButton:hover, #WorkspacePlus:hover {
+    background: #DCDCD8;
+    color: #1A1A1A;
+}
+
+#WorkspacePlus {
+    font-size: 16px;
+    font-weight: 600;
+}
+
+#SessionList {
+    background: transparent;
+}
+
+#SessionRow {
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    min-height: 28px;
+    max-height: 32px;
+}
+
+#SessionRow:hover {
+    background: #E6E6E3;
+}
+
+#SessionRow[selected="true"] {
+    background: #E0E0DC;
+}
+
+#SessionRow[selected="true"]:hover {
+    background: #D8D8D4;
+}
+
+#SessionTitleLabel {
+    font-size: 12.5px;
+    color: #2A2A2A;
+    background: transparent;
+}
+
+#SessionRow[selected="true"] #SessionTitleLabel {
+    color: #1A1A1A;
+    font-weight: 500;
+}
+
+#ArchiveTag {
+    font-size: 10px;
+    color: #8A8A8A;
+    padding: 1px 6px;
+    background: #E8E8E5;
+    border-radius: 6px;
+}
+
+#StarButton {
+    min-width: 20px;
+    max-width: 20px;
+    min-height: 20px;
+    border: none;
+    background: transparent;
+    font-size: 13px;
+    color: #B0B0B0;
+    padding: 0;
+}
+
+#StarButton:hover {
+    color: #E6A817;
+}
+
+#StarButton[starred="true"] {
+    color: #E6A817;
 }
 
 /* ——— Buttons ——— */
