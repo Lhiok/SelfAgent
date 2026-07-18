@@ -33,6 +33,7 @@ all = [
 [project.scripts]
 selfagent-regression = "regression.__main__:main"
 selfagent-ui = "web.__main__:main"
+selfagent-web = "web.__main__:main"
 
 [tool.setuptools]
 py-modules = ["config"]

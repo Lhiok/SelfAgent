@@ -46,16 +46,20 @@ feishu:
 
 未填写时，仍可回退到同名系统/用户环境变量（如 `DEEPSEEK_API_KEY`）。
 
-## 本地对话工作台
-
-浏览器 UI：对话归在工作目录下的树形侧栏（可折叠、收藏、归档）。
+## 启动
 
 ```bash
 pip install -e ".[ui]"
-python -m web
-# 或: selfagent-ui
+start.bat
+# 或: python start.py
+# 或: python -m web
+# 或: selfagent-ui / selfagent-web
 # 打开 http://127.0.0.1:8787
 ```
+
+## 本地对话工作台
+
+浏览器 UI：对话归在工作目录下的树形侧栏（可折叠、收藏、归档）。
 
 - 左侧：工作目录 → 其下对话；目录可折叠；对话可收藏（置顶）/ 归档（「归档」按钮显示）
 - 中间聊天：运行中实时显示思考 / 工具步骤；文件改动以列表展示，点击后在右侧面板查看 diff；路径可点 `vscode://` 用 VS Code 打开
