@@ -486,10 +486,17 @@ class ChatPane(QWidget):
 
 
 def _bubble(cls: str, role: str, text: str) -> str:
+    body = _escape(text)
+    # 用户消息：用 table 画圆角气泡（QTextBrowser 对 div border-radius 支持差）
+    if cls == "user":
+        return (
+            '<table class="user-wrap" cellspacing="0" cellpadding="0">'
+            f'<tr><td class="user-bubble">{body}</td></tr></table>'
+        )
     return (
         f"<div class='msg {cls}'>"
         f"<div class='role'>{_escape(role)}</div>"
-        f"<div class='bubble'>{_escape(text)}</div>"
+        f"<div class='bubble'>{body}</div>"
         f"</div>"
     )
 

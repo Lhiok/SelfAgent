@@ -32,19 +32,22 @@ body {
   margin: 0 0 12px 0;
   max-width: 44rem;
 }
-.msg.user {
-  margin-bottom: 16px;
-}
 .role { display: none; }
 .bubble {
   color: #1A1A1A;
 }
-.user .bubble {
-  background: #EBEBE8;
-  border-radius: 14px;
+/* 用户圆角气泡底图（table 单元格，Qt 可渲染圆角） */
+table.user-wrap {
+  margin: 0 0 14px 0;
+  border-collapse: separate;
+  max-width: 85%;
+}
+td.user-bubble {
+  background-color: #E8E8E5;
+  color: #1A1A1A;
+  border-radius: 18px;
+  -qt-border-radius: 18px;
   padding: 12px 16px;
-  display: inline-block;
-  max-width: 100%;
 }
 .assistant .bubble {
   background: transparent;
@@ -53,7 +56,7 @@ body {
 }
 .error .bubble {
   background: #FCEBEB;
-  border-radius: 12px;
+  border-radius: 14px;
   padding: 10px 14px;
   color: #A33;
   display: inline-block;
