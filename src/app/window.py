@@ -7,14 +7,11 @@ from typing import Any
 
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import (
-    QComboBox,
     QFileDialog,
-    QHBoxLayout,
     QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
-    QPushButton,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -56,7 +53,6 @@ class MainWindow(QMainWindow):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # 工具条挂在中间栏标题旁：模式 / 细节 / 删除（整体布局仿 Agents 三栏）
         split = QSplitter(Qt.Orientation.Horizontal)
         split.setHandleWidth(1)
         self.sidebar = Sidebar()
@@ -65,20 +61,11 @@ class MainWindow(QMainWindow):
 
         self.workdir_label = QLabel("")
         self.workdir_label.setObjectName("WorkdirLabel")
-        self.detail_combo = QComboBox()
-        self.detail_combo.addItems(["off", "summary", "full"])
-        self.detail_combo.setToolTip("过程细节")
-        self.detail_combo.currentTextChanged.connect(self._on_detail_changed)
-        self.btn_delete = QPushButton("删除")
-        self.btn_delete.setObjectName("DangerButton")
-        self.btn_delete.clicked.connect(self._delete_session)
         header = self.chat.findChild(QWidget, "ChatHeader")
         if header is not None:
             hl = header.layout()
             if hl is not None:
                 hl.addWidget(self.workdir_label)
-                hl.addWidget(self.detail_combo)
-                hl.addWidget(self.btn_delete)
 
         split.addWidget(self.sidebar)
         split.addWidget(self.chat)
@@ -145,13 +132,7 @@ class MainWindow(QMainWindow):
         self.workdir_label.setText(Path(wd).name if wd else "")
         self.workdir_label.setToolTip(wd)
         mode = str(session.get("mode") or "agent")
-        detail = str(session.get("detail") or "off")
         self.chat.set_mode(mode if mode in {"agent", "plan"} else "agent")
-        self.detail_combo.blockSignals(True)
-        self.detail_combo.setCurrentText(
-            detail if detail in {"off", "summary", "full"} else "off"
-        )
-        self.detail_combo.blockSignals(False)
 
     def _add_workspace(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "选择工作目录")
@@ -211,11 +192,6 @@ class MainWindow(QMainWindow):
         self.workdir_label.setText("")
         self.inspector.clear()
 
-    def _delete_session(self) -> None:
-        if not self._session_id:
-            return
-        self._delete_session_by_id(self._session_id)
-
     @Slot(str)
     def _delete_session_by_id(self, session_id: str) -> None:
         if self._busy:
@@ -246,21 +222,11 @@ class MainWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, "切换失败", str(exc))
 
-    def _on_detail_changed(self, detail: str) -> None:
-        if not self._session_id or self._busy:
-            return
-        try:
-            self._session = self.store.patch_session(self._session_id, detail=detail)
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(self, "切换失败", str(exc))
-
     # ---------- run ----------
 
     def _set_busy(self, busy: bool) -> None:
         self._busy = busy
         self.chat.set_busy(busy)
-        self.detail_combo.setEnabled(not busy)
-        self.btn_delete.setEnabled(not busy)
 
     @Slot(str)
     def _send(self, text: str) -> None:
