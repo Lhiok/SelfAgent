@@ -36,14 +36,12 @@ body {
 .role {
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.3px;
   color: #6E6E6E;
   margin: 0 0 6px 0;
-  text-transform: uppercase;
 }
-.user .role { color: #3794FF; }
-.assistant .role { color: #89D185; }
-.error .role { color: #F48771; }
+.user .role { color: #3794FF; text-transform: none; letter-spacing: 0; }
+.assistant .role { color: #89D185; text-transform: none; letter-spacing: 0; }
+.error .role { color: #F48771; text-transform: none; letter-spacing: 0; }
 .bubble {
   color: #D4D4D4;
   white-space: normal;
@@ -78,8 +76,6 @@ body {
   font-weight: 600;
   color: #9D9D9D;
   font-size: 11px;
-  letter-spacing: 0.3px;
-  text-transform: uppercase;
 }
 .thought {
   color: #858585;

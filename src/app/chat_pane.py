@@ -84,7 +84,7 @@ class ChatPane(QWidget):
 
         self.ask_row = QHBoxLayout()
         self.ask_row.setContentsMargins(16, 0, 16, 0)
-        self.btn_open_ask = QPushButton("回答提问")
+        self.btn_open_ask = QPushButton("打开确认面板")
         self.btn_open_ask.setObjectName("PrimaryButton")
         self.btn_open_ask.clicked.connect(self.open_ask_requested.emit)
         self.ask_row.addWidget(self.btn_open_ask)
@@ -96,7 +96,7 @@ class ChatPane(QWidget):
 
         layout.addLayout(body, 1)
 
-        # Cursor-style composer dock
+        # 底部输入区（交互参照 Cursor Composer）
         dock = QWidget()
         dock.setObjectName("ComposerDock")
         dock_l = QVBoxLayout(dock)
@@ -109,9 +109,9 @@ class ChatPane(QWidget):
         composer.setContentsMargins(2, 2, 6, 2)
         composer.setSpacing(6)
         self.input = QTextEdit()
-        self.input.setPlaceholderText("Plan, ask, or agent…  Ctrl+Enter 发送")
+        self.input.setPlaceholderText("输入任务…  Ctrl+Enter 发送")
         self.input.setFixedHeight(72)
-        self.btn_send = QPushButton("Send")
+        self.btn_send = QPushButton("发送")
         self.btn_send.setObjectName("PrimaryButton")
         self.btn_send.setMinimumWidth(72)
         self.btn_send.clicked.connect(self._emit_send)
@@ -119,7 +119,7 @@ class ChatPane(QWidget):
         composer.addWidget(self.btn_send)
         dock_l.addWidget(composer_box)
 
-        self.status = QLabel("Ready")
+        self.status = QLabel("就绪")
         self.status.setObjectName("StatusLabel")
         dock_l.addWidget(self.status)
         layout.addWidget(dock)
@@ -137,14 +137,7 @@ class ChatPane(QWidget):
         self.btn_confirm.setEnabled(not busy)
 
     def set_status(self, text: str) -> None:
-        mapping = {
-            "就绪": "Ready",
-            "处理中…": "Running…",
-            "出错": "Error",
-            "等待你的选择…": "Waiting for input…",
-            "已提交确认，继续处理…": "Submitted — continuing…",
-        }
-        self.status.setText(mapping.get(text, text))
+        self.status.setText(text)
 
     def clear(self) -> None:
         self._body_parts = []
@@ -162,10 +155,10 @@ class ChatPane(QWidget):
         for turn in session.get("turns") or []:
             if not isinstance(turn, dict):
                 continue
-            parts.append(_bubble("user", "User", str(turn.get("user") or "")))
-            parts.append(_bubble("assistant", "Agent", str(turn.get("answer") or "")))
+            parts.append(_bubble("user", "你", str(turn.get("user") or "")))
+            parts.append(_bubble("assistant", "助手", str(turn.get("answer") or "")))
             for ans in turn.get("ask_answers") or []:
-                parts.append(f"<div class='meta'>Answer · {_escape(str(ans))}</div>")
+                parts.append(f"<div class='meta'>确认 · {_escape(str(ans))}</div>")
             changes = turn.get("changes") or []
             if changes:
                 parts.append(self._changes_html(changes, prefix=f"t{turn.get('index', 0)}"))
@@ -173,7 +166,7 @@ class ChatPane(QWidget):
             if detail:
                 key = f"detail-{turn.get('index')}"
                 parts.append(
-                    f"<div class='meta'><a href='detail:{key}'>View trace</a></div>"
+                    f"<div class='meta'><a href='detail:{key}'>查看过程细节</a></div>"
                 )
                 self._changes_by_key[key] = {"_detail": detail}
         plan = session.get("pending_plan")
@@ -183,15 +176,15 @@ class ChatPane(QWidget):
             summary = _escape(
                 str(plan.get("summary") or plan.get("text") or "待确认计划")[:240]
             )
-            parts.append(f"<div class='plan-box'><b>Pending plan</b><br>{summary}</div>")
+            parts.append(f"<div class='plan-box'><b>待确认计划</b><br>{summary}</div>")
         if session.get("pending_ask"):
             self.ask_widget.show()
         self._body_parts = parts
         if not parts:
             self._body_parts = [
-                "<div class='empty'><b>New chat</b>"
-                "在下方 Composer 输入任务。可切换 Agent / Plan，"
-                "过程细节与文件 diff 显示在右侧面板。</div>"
+                "<div class='empty'><b>新会话</b>"
+                "在下方输入任务开始。可切换 Agent / Plan，"
+                "过程细节与文件改动在右侧检视。</div>"
             ]
         self.set_todos(session.get("todos"))
         self._paint()
@@ -204,9 +197,9 @@ class ChatPane(QWidget):
         ):
             self._body_parts = []
         self._live_steps = []
-        self._body_parts.append(_bubble("user", "User", user_text))
+        self._body_parts.append(_bubble("user", "你", user_text))
         self._body_parts.append(
-            "<div class='live' id='live'><div class='role'>Agent · running</div></div>"
+            "<div class='live' id='live'><div class='role'>助手 · 进行中</div></div>"
         )
         self._paint()
 
@@ -231,7 +224,7 @@ class ChatPane(QWidget):
     def finish_live(self, answer: str, *, ok: bool = True) -> None:
         # remove live block
         self._body_parts = [p for p in self._body_parts if "id='live'" not in p]
-        role = "Agent" if ok else "Error"
+        role = "助手" if ok else "错误"
         cls = "assistant" if ok else "error"
         self._body_parts.append(_bubble(cls, role, answer))
         self._live_steps = []
@@ -268,7 +261,7 @@ class ChatPane(QWidget):
                     current = str(it.get("text") or it.get("title") or "")
                     break
         self.todo_label.setText(
-            f"Todos {done}/{total}" + (f"  ·  {current}" if current else "")
+            f"任务 {done}/{total}" + (f"  ·  {current}" if current else "")
         )
         self.todo_widget.show()
 
@@ -298,7 +291,7 @@ class ChatPane(QWidget):
                 self.detail_inspect_requested.emit(detail)
 
     def _changes_html(self, changes: list[dict[str, Any]], *, prefix: str) -> str:
-        bits = ["<div class='changes'><b>Files</b><ul style='margin:6px 0 0 18px;padding:0'>"]
+        bits = ["<div class='changes'><b>文件改动</b><ul style='margin:6px 0 0 18px;padding:0'>"]
         for i, ch in enumerate(changes):
             path = str(ch.get("path") or "?")
             kind = str(ch.get("kind") or "")
@@ -315,7 +308,7 @@ class ChatPane(QWidget):
         thought = str(step.get("thought") or "").strip()
         actions = step.get("actions") or []
         final = str(step.get("final_answer") or "").strip()
-        parts = [f"<div class='step'><div class='step-title'>Step {idx}</div>"]
+        parts = [f"<div class='step'><div class='step-title'>步骤 {idx}</div>"]
         if thought:
             short = thought if len(thought) < 280 else thought[:280] + "…"
             parts.append(f"<div class='thought'>{_escape(short)}</div>")
@@ -344,7 +337,7 @@ class ChatPane(QWidget):
     def _set_live_inner(self, inner: str) -> None:
         live = (
             "<div class='live' id='live'>"
-            "<div class='role'>Agent · running</div>"
+            "<div class='role'>助手 · 进行中</div>"
             f"{inner}</div>"
         )
         replaced = False

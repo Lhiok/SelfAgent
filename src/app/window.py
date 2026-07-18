@@ -63,19 +63,19 @@ class MainWindow(QMainWindow):
         top.setSpacing(8)
         brand = QLabel("SelfAgent")
         brand.setObjectName("BrandLabel")
-        self.title_label = QLabel("No chat selected")
+        self.title_label = QLabel("未选择会话")
         self.title_label.setObjectName("SessionTitle")
         self.workdir_label = QLabel("")
         self.workdir_label.setObjectName("WorkdirLabel")
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["agent", "plan"])
-        self.mode_combo.setToolTip("Mode")
+        self.mode_combo.setToolTip("运行模式")
         self.mode_combo.currentTextChanged.connect(self._on_mode_changed)
         self.detail_combo = QComboBox()
         self.detail_combo.addItems(["off", "summary", "full"])
-        self.detail_combo.setToolTip("Detail level")
+        self.detail_combo.setToolTip("过程细节")
         self.detail_combo.currentTextChanged.connect(self._on_detail_changed)
-        self.btn_delete = QPushButton("Delete")
+        self.btn_delete = QPushButton("删除")
         self.btn_delete.setObjectName("DangerButton")
         self.btn_delete.clicked.connect(self._delete_session)
         top.addWidget(brand)
@@ -118,7 +118,7 @@ class MainWindow(QMainWindow):
 
         self._refresh_sidebar()
         if not self.store.list_workspaces():
-            self.chat.set_status("Add a workspace with + in the sidebar")
+            self.chat.set_status("请先在侧栏添加工作目录（+）")
 
     # ---------- sidebar / session ----------
 
@@ -229,7 +229,7 @@ class MainWindow(QMainWindow):
         self._session_id = None
         self._session = None
         self.chat.clear()
-        self.title_label.setText("No chat selected")
+        self.title_label.setText("未选择会话")
         self.workdir_label.setText("")
         self._refresh_sidebar()
 
