@@ -19,9 +19,12 @@ SelfAgent：面向各类项目的 Python 智能体基础框架，按层解耦：
 cd SelfAgent
 python -m venv .venv
 .venv\Scripts\activate
-pip install -e ".[dev,ui]"
+pip install -e ".[dev,ui,skills]"
+playwright install chromium
 copy config.example.yaml config.yaml
 ```
+
+可选 extra：`dev`（pytest）、`ui`（Web 工作台）、`skills`（截屏 mss/Pillow + 浏览器 Playwright）。也可一次装全：`pip install -e ".[all]"`。
 
 在对应模块节中配置（比集中写在 `env` 更易维护）：
 
@@ -102,7 +105,7 @@ python examples/chat_session.py --workdir D:\my-project
 
 ## 工作目录
 
-Agent 可设定工作目录，并同步到 `local_file` / `search_code` / `shell_run` / `git_ops` 的 `root`：
+Agent 可设定工作目录，并同步到带 `root` 的 Skill（如 `local_file` / `search_code` / `shell_run` / `git_ops` / `dotnet_build` / `diff_review` / `todo_tracker` / `screenshot` / `browser`）：
 
 ```python
 agent = ReActAgent(workdir="/path/to/project")
@@ -332,6 +335,63 @@ Git 仓库操作。默认只读；`allow_write: true` 后才可 `add`/`commit`�
 {"action":"log","max_count":10}
 {"action":"add","paths":["src/foo.py"]}
 {"action":"commit","message":"fix: handle empty config"}
+```
+
+## Skill：dotnet_build
+
+在工作目录执行 `dotnet restore/build/test`（需本机 .NET SDK）。
+
+```json
+{"action":"build","project":"MyApp.sln","configuration":"Debug"}
+{"action":"test","cwd":"src/MyApp.Tests"}
+```
+
+## Skill：web_fetch / http_request
+
+抓取公开网页正文，或发送通用 HTTP 请求。默认禁止内网（防 SSRF）；`allow_private: true` 可放开。
+
+```json
+{"action":"fetch","url":"https://example.com/docs"}
+{"action":"get","url":"https://httpbin.org/get"}
+{"action":"post","url":"https://httpbin.org/post","json_body":{"ok":true}}
+```
+
+## Skill：diff_review
+
+对 git diff / 补丁文本做静态复盘（文件统计 + 风险关键词）。
+
+```json
+{"action":"review","source":"git","staged":false}
+{"action":"review","source":"text","diff":"diff --git a/x b/x\n+password = secret"}
+```
+
+## Skill：todo_tracker
+
+跨步骤任务清单，落盘 `.selfagent/todos.json`。
+
+```json
+{"action":"add","items":["修编译错误","补单测"]}
+{"action":"list"}
+{"action":"complete","id":"abc123"}
+```
+
+## Skill：screenshot
+
+截屏保存到工作目录，或读取已有图片尺寸。优先 `mss`+`Pillow`；Windows 可走 PowerShell 兜底。
+
+```json
+{"action":"capture","path":"logs/screenshots/ui.png"}
+{"action":"read","path":"logs/screenshots/ui.png"}
+```
+
+## Skill：browser
+
+Playwright 无头浏览器（可选依赖：`pip install playwright && playwright install chromium`）。
+
+```json
+{"action":"goto","url":"https://example.com"}
+{"action":"content"}
+{"action":"screenshot","path":"logs/browser/page.png"}
 ```
 
 ## 扩展

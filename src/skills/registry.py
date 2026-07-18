@@ -11,12 +11,19 @@ from log import get_logger
 from permission import PermissionGuard
 from skills.ask_user import AskUserSkill
 from skills.base import Skill, SkillResult
+from skills.browser import BrowserSkill
+from skills.diff_review import DiffReviewSkill
+from skills.dotnet_build import DotnetBuildSkill
 from skills.feishu_notify import FeishuNotifySkill
 from skills.git_ops import GitOpsSkill
+from skills.http_request import HttpRequestSkill
 from skills.local_file import LocalFileSkill
 from skills.request_capability import RequestCapabilitySkill
+from skills.screenshot import ScreenshotSkill
 from skills.search_code import SearchCodeSkill
 from skills.shell_run import ShellRunSkill
+from skills.todo_tracker import TodoTrackerSkill
+from skills.web_fetch import WebFetchSkill
 
 logger = get_logger("skills")
 
@@ -191,6 +198,82 @@ class SkillRegistry:
                     git_bin=str(go_cfg.get("git_bin") or "git"),
                     timeout=float(go_cfg.get("timeout", 60)),
                     max_output_chars=int(go_cfg.get("max_output_chars", 30000)),
+                    enabled=True,
+                )
+            )
+
+        db_cfg = section.get("dotnet_build") or {}
+        if bool(db_cfg.get("enabled", True)):
+            registry.register(
+                DotnetBuildSkill(
+                    root=db_cfg.get("root", root),
+                    dotnet_bin=str(db_cfg.get("dotnet_bin") or "dotnet"),
+                    default_timeout=float(db_cfg.get("timeout", 180)),
+                    max_output_chars=int(db_cfg.get("max_output_chars", 30000)),
+                    enabled=True,
+                )
+            )
+
+        wf_cfg = section.get("web_fetch") or {}
+        if bool(wf_cfg.get("enabled", True)):
+            registry.register(
+                WebFetchSkill(
+                    allow_private=bool(wf_cfg.get("allow_private", False)),
+                    default_timeout=float(wf_cfg.get("timeout", 20)),
+                    max_chars=int(wf_cfg.get("max_chars", 12000)),
+                    enabled=True,
+                )
+            )
+
+        hr_cfg = section.get("http_request") or {}
+        if bool(hr_cfg.get("enabled", True)):
+            registry.register(
+                HttpRequestSkill(
+                    allow_private=bool(hr_cfg.get("allow_private", False)),
+                    default_timeout=float(hr_cfg.get("timeout", 30)),
+                    max_chars=int(hr_cfg.get("max_chars", 20000)),
+                    enabled=True,
+                )
+            )
+
+        dr_cfg = section.get("diff_review") or {}
+        if bool(dr_cfg.get("enabled", True)):
+            registry.register(
+                DiffReviewSkill(
+                    root=dr_cfg.get("root", root),
+                    git_bin=str(dr_cfg.get("git_bin") or "git"),
+                    max_diff_chars=int(dr_cfg.get("max_diff_chars", 200000)),
+                    enabled=True,
+                )
+            )
+
+        tt_cfg = section.get("todo_tracker") or {}
+        if bool(tt_cfg.get("enabled", True)):
+            registry.register(
+                TodoTrackerSkill(
+                    root=tt_cfg.get("root", root),
+                    enabled=True,
+                )
+            )
+
+        ss_cfg = section.get("screenshot") or {}
+        if bool(ss_cfg.get("enabled", True)):
+            registry.register(
+                ScreenshotSkill(
+                    root=ss_cfg.get("root", root),
+                    output_dir=str(ss_cfg.get("output_dir") or "logs/screenshots"),
+                    enabled=True,
+                )
+            )
+
+        br_cfg = section.get("browser") or {}
+        if bool(br_cfg.get("enabled", True)):
+            registry.register(
+                BrowserSkill(
+                    root=br_cfg.get("root", root),
+                    allow_private=bool(br_cfg.get("allow_private", False)),
+                    output_dir=str(br_cfg.get("output_dir") or "logs/browser"),
+                    max_chars=int(br_cfg.get("max_chars", 80000)),
                     enabled=True,
                 )
             )

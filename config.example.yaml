@@ -55,11 +55,18 @@ react:
       local_file: [list, read]
       search_code: [search]
       git_ops: [status, diff, log, branch, show]
+      web_fetch: [fetch]
+      diff_review: [review]
+      todo_tracker: [list]
+      screenshot: [read]
     # Plan Mode 下额外允许的交互 / 通知 Skill
     allow_skills:
       - ask_user
       - feishu_notify
       - request_capability
+      - web_fetch
+      - diff_review
+      - todo_tracker
   system_prompt: |
     你是一个可调用工具的助手。请严格使用 ReAct 格式回复：
     Thought: 思考下一步
@@ -100,6 +107,32 @@ skills:
     # false=仅只读；true 允许 add/commit
     allow_write: false
     timeout: 60
+  dotnet_build:
+    enabled: true
+    timeout: 180
+  web_fetch:
+    enabled: true
+    # true 时允许访问内网（有 SSRF 风险，默认关闭）
+    allow_private: false
+    timeout: 20
+    max_chars: 12000
+  http_request:
+    enabled: true
+    allow_private: false
+    timeout: 30
+    max_chars: 20000
+  diff_review:
+    enabled: true
+  todo_tracker:
+    enabled: true
+  screenshot:
+    enabled: true
+    output_dir: logs/screenshots
+  browser:
+    # 需 pip install playwright && playwright install chromium
+    enabled: true
+    allow_private: false
+    output_dir: logs/browser
 
 permission:
   # 是否启用权限控制（对 ReAct 调用 Skill 限权）
@@ -117,6 +150,14 @@ permission:
           actions: [search]
         git_ops:
           actions: [status, diff, log, branch, show]
+        web_fetch:
+          actions: [fetch]
+        diff_review:
+          actions: [review]
+        todo_tracker:
+          actions: [list]
+        screenshot:
+          actions: [read]
         ask_user: true
         request_capability: true
         feishu_notify:
@@ -135,6 +176,20 @@ permission:
           actions: [run]
         feishu_notify:
           actions: [text, markdown]
+        dotnet_build:
+          actions: [build, test, restore]
+        web_fetch:
+          actions: [fetch]
+        http_request:
+          actions: [request, get, post, put, patch, delete]
+        diff_review:
+          actions: [review]
+        todo_tracker:
+          actions: [list, add, complete, remove, clear, update]
+        screenshot:
+          actions: [capture, read]
+        browser:
+          actions: [goto, content, screenshot, click, fill, evaluate]
     admin:
       skills:
         "*":

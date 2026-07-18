@@ -273,7 +273,14 @@ class ReActAgent:
             if plan_allow_skills is not None
             else (
                 plan_cfg.get("allow_skills")
-                or ["ask_user", "feishu_notify", "request_capability"]
+                or [
+                    "ask_user",
+                    "feishu_notify",
+                    "request_capability",
+                    "web_fetch",
+                    "diff_review",
+                    "todo_tracker",
+                ]
             )
         )
         self.plan_allow_skills = {str(s).strip() for s in raw_allow if str(s).strip()}
