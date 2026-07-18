@@ -101,6 +101,7 @@ class MainWindow(QMainWindow):
         self.sidebar.refresh_requested.connect(self._refresh_sidebar)
         self.sidebar.session_patch_requested.connect(self._patch_session)
         self.sidebar.workspace_patch_requested.connect(self._patch_workspace)
+        self.sidebar.session_delete_requested.connect(self._delete_session_by_id)
 
         self.chat.send_requested.connect(self._send)
         self.chat.confirm_plan_requested.connect(self._confirm_plan)
@@ -190,9 +191,13 @@ class MainWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, "更新失败", str(exc))
             return
+        archived = bool(fields.get("archived"))
         self._refresh_sidebar()
         if session_id == self._session_id:
-            self._select_session(session_id)
+            if archived:
+                self._clear_current_session()
+            else:
+                self._select_session(session_id)
 
     @Slot(str, dict)
     def _patch_workspace(self, workspace_id: str, fields: dict) -> None:
@@ -203,24 +208,39 @@ class MainWindow(QMainWindow):
             return
         self._refresh_sidebar()
 
+    def _clear_current_session(self) -> None:
+        self._session_id = None
+        self._session = None
+        self._pending_ask = None
+        self.chat.clear()
+        self.chat.set_chat_title("未选择会话")
+        self.workdir_label.setText("")
+        self.inspector.clear()
+
     def _delete_session(self) -> None:
-        if not self._session_id or self._busy:
+        if not self._session_id:
+            return
+        self._delete_session_by_id(self._session_id)
+
+    @Slot(str)
+    def _delete_session_by_id(self, session_id: str) -> None:
+        if self._busy:
+            QMessageBox.information(self, "请稍候", "当前任务仍在运行")
+            return
+        if not session_id:
             return
         if (
-            QMessageBox.question(self, "删除会话", "确定删除当前会话？")
+            QMessageBox.question(self, "删除会话", "确定删除该对话？")
             != QMessageBox.StandardButton.Yes
         ):
             return
         try:
-            self.store.delete_session(self._session_id)
+            self.store.delete_session(session_id)
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, "删除失败", str(exc))
             return
-        self._session_id = None
-        self._session = None
-        self.chat.clear()
-        self.chat.set_chat_title("未选择会话")
-        self.workdir_label.setText("")
+        if session_id == self._session_id:
+            self._clear_current_session()
         self._refresh_sidebar()
 
     def _on_mode_changed(self, mode: str) -> None:

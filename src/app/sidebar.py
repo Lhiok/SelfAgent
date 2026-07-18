@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QMenu,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -24,6 +25,8 @@ from PySide6.QtWidgets import (
 class SessionRow(QFrame):
     clicked = Signal(str)
     star_toggled = Signal(str, bool)
+    archive_requested = Signal(str)
+    delete_requested = Signal(str)
 
     def __init__(
         self,
@@ -67,6 +70,19 @@ class SessionRow(QFrame):
             tag.setObjectName("ArchiveTag")
             layout.addWidget(tag)
 
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_menu)
+
+    def _show_menu(self, pos) -> None:
+        menu = QMenu(self)
+        act_archive = QAction("归档", self)
+        act_delete = QAction("删除", self)
+        act_archive.triggered.connect(lambda: self.archive_requested.emit(self.session_id))
+        act_delete.triggered.connect(lambda: self.delete_requested.emit(self.session_id))
+        menu.addAction(act_archive)
+        menu.addAction(act_delete)
+        menu.exec(self.mapToGlobal(pos))
+
     def _paint_star(self) -> None:
         if self._starred:
             self.star_btn.setText("★")
@@ -106,6 +122,8 @@ class WorkspaceBlock(QWidget):
     rename = Signal(str)
     session_clicked = Signal(str)
     session_star = Signal(str, bool)
+    session_archive = Signal(str)
+    session_delete = Signal(str)
 
     def __init__(self, ws: dict[str, Any], current_session_id: str | None, parent=None) -> None:
         super().__init__(parent)
@@ -152,10 +170,10 @@ class WorkspaceBlock(QWidget):
         h.addWidget(self.btn_new)
 
         root.addWidget(header)
-        header.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
-        act_rename = QAction("重命名工作区", header)
-        act_rename.triggered.connect(lambda: self.rename.emit(self.workspace_id))
-        header.addAction(act_rename)
+        header.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        header.customContextMenuRequested.connect(
+            lambda pos, h=header: self._show_workspace_menu(h, pos)
+        )
 
         self.sessions_wrap = QWidget()
         self.sessions_wrap.setObjectName("SessionList")
@@ -177,11 +195,23 @@ class WorkspaceBlock(QWidget):
             )
             row.clicked.connect(self.session_clicked.emit)
             row.star_toggled.connect(self.session_star.emit)
+            row.archive_requested.connect(self.session_archive.emit)
+            row.delete_requested.connect(self.session_delete.emit)
             row.setToolTip(str(sess.get("preview") or ""))
             self._sess_layout.addWidget(row)
 
         self._sess_layout.addStretch(0)
         root.addWidget(self.sessions_wrap)
+
+    def _show_workspace_menu(self, header: QWidget, pos) -> None:
+        menu = QMenu(header)
+        act_new = QAction("新增对话", header)
+        act_rename = QAction("重命名", header)
+        act_new.triggered.connect(lambda: self.new_session.emit(self.workspace_id))
+        act_rename.triggered.connect(lambda: self.rename.emit(self.workspace_id))
+        menu.addAction(act_new)
+        menu.addAction(act_rename)
+        menu.exec(header.mapToGlobal(pos))
 
 
 class Sidebar(QWidget):
@@ -191,6 +221,7 @@ class Sidebar(QWidget):
     refresh_requested = Signal()
     session_patch_requested = Signal(str, dict)
     workspace_patch_requested = Signal(str, dict)
+    session_delete_requested = Signal(str)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -253,6 +284,8 @@ class Sidebar(QWidget):
             block.rename.connect(self._rename_workspace)
             block.session_clicked.connect(self.session_selected.emit)
             block.session_star.connect(self._on_star)
+            block.session_archive.connect(self._on_archive)
+            block.session_delete.connect(self.session_delete_requested.emit)
             self._list_layout.addWidget(block)
             self._blocks.append(block)
         self._list_layout.addStretch(1)
@@ -264,6 +297,9 @@ class Sidebar(QWidget):
 
     def _on_star(self, session_id: str, starred: bool) -> None:
         self.session_patch_requested.emit(session_id, {"starred": starred})
+
+    def _on_archive(self, session_id: str) -> None:
+        self.session_patch_requested.emit(session_id, {"archived": True})
 
 
 def _short_path(path: str) -> str:
