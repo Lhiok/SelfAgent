@@ -2,13 +2,14 @@
 
 本分支提供**命令行 CLI**；通用核心与 `main` 对齐。其它端：`web`（浏览器工作台）、`app`（Windows 桌面）。
 
-## 使用
+## 启动
 
 ```bash
 pip install -e ".[dev,skills]"
-selfagent-cli
-# 或
-python -m cli --workdir D:\my-project
+start.bat
+# 或: python start.py
+# 或: python -m cli --workdir D:\my-project
+# 或: selfagent-cli
 ```
 
 常用参数：`--workdir` / `--resume` / `--list-sessions`。交互内命令见启动提示（`/plan` `/agent` `/confirm` 等）。
