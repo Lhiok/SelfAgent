@@ -101,12 +101,15 @@ class Conversation:
                 AIMessage(role="user", content=_CONTINUOUS_HINT),
             ]
 
-        logger.notice(
-            f"会话 {self.session_id[:8]} 第 {self.turn_count + 1} 轮，"
-            f"history={len(self.messages)} mode={agent.mode.value}"
+        turn_no = self.turn_count + 1
+        self._log_turn_separator(
+            turn_no,
+            mode=agent.mode.value,
+            user=text,
+            kind="chat",
         )
         result = agent.run(text, history=history)
-        self._ingest_result(user_input=text, result=result)  # 使用去空白后的文本
+        self._ingest_result(user_input=text, result=result)
         if self.persist_dir is not None:
             self.save()
         return result
@@ -126,6 +129,13 @@ class Conversation:
                 mode=AgentMode.AGENT.value,
             )
 
+        turn_no = self.turn_count + 1
+        self._log_turn_separator(
+            turn_no,
+            mode=AgentMode.AGENT.value,
+            user=user_note,
+            kind="confirm_plan",
+        )
         executor = self.agent.with_mode(AgentMode.AGENT)
         result = executor.execute_plan(target, history=list(self.messages))
         # 把执行过程记入对话，便于后续追问
@@ -255,6 +265,26 @@ class Conversation:
         if mode:
             conv.set_mode(mode)
         return conv
+
+    def _log_turn_separator(
+        self,
+        turn_no: int,
+        *,
+        mode: str,
+        user: str,
+        kind: str = "chat",
+    ) -> None:
+        preview = user.replace("\n", " ").strip()
+        if len(preview) > 120:
+            preview = preview[:119] + "…"
+        bar = "=" * 72
+        logger.notice(
+            f"\n{bar}\n"
+            f"  第 {turn_no} 轮 | session={self.session_id[:8]} | "
+            f"mode={mode} | {kind}\n"
+            f"  用户: {preview}\n"
+            f"{bar}"
+        )
 
     def _ingest_result(self, *, user_input: str, result: ReActResult) -> None:
         # 用本轮完整非 system 消息替换历史，天然包含此前上下文

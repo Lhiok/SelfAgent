@@ -119,6 +119,53 @@ def test_agent_detail_off_silent(tmp_path):
     assert chunks == []
 
 
+def test_agent_detail_persists_to_run_log(tmp_path):
+    import config as cfg
+    from log import Logger, reset_logger
+
+    cfg.set_config(
+        {
+            "log": {
+                "level": "notice",
+                "modes": ["file"],
+                "file": {"path": str(tmp_path / "app.log")},
+            }
+        }
+    )
+    reset_logger()
+
+    class _AI(AIClient):
+        provider = "scripted"
+
+        def chat(self, messages, options: ChatOptions | None = None) -> AIResponse:
+            return AIResponse(
+                content="Thought: 思考中\nFinal Answer: 完成\n",
+                model="s",
+                provider=self.provider,
+            )
+
+    # 触发 from_config 绑定本次运行日志
+    Logger.from_config("react")
+    agent = ReActAgent(
+        ai=_AI(),
+        skills=SkillRegistry(permission=PermissionGuard.allow_all()),
+        permission=PermissionGuard.allow_all(),
+        detail="summary",
+        stream_detail=False,  # 不打印控制台，仍应落盘
+        max_steps=3,
+    )
+    result = agent.run("任务")
+    assert result.completed
+    from log import get_run_log_path
+
+    path = get_run_log_path()
+    assert path is not None
+    text = path.read_text(encoding="utf-8")
+    assert "ReAct 细节" in text
+    assert "Thought: 思考中" in text
+    assert "Final Answer: 完成" in text
+
+
 def test_format_result_and_set_detail():
     result = ReActResult(
         answer="ok",

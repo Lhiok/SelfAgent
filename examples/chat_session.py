@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 import config as cfg
+from log import get_run_log_path, reset_logger
 from permission import PermissionGuard
 from react import AgentMode, Conversation, ReActAgent
 from skills import SkillRegistry
@@ -16,6 +17,7 @@ from skills import SkillRegistry
 
 def main() -> None:
     cfg.load_config(ROOT / "config.yaml")
+    reset_logger()  # 确保按当前配置生成本次运行日志文件
     agent = ReActAgent(
         skills=SkillRegistry.from_config(),
         permission=PermissionGuard.from_config(),
@@ -24,6 +26,9 @@ def main() -> None:
     conv = Conversation(agent)
     print("连续对话已启动。命令: /plan /agent /confirm /detail /reset /quit")
     print(f"当前细节级别: {agent.detail}（可用 /detail off|summary|full）")
+    run_log = get_run_log_path()
+    if run_log is not None:
+        print(f"本次运行日志: {run_log}")
     while True:
         try:
             text = input("\n你> ").strip()

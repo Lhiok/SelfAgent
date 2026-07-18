@@ -12,6 +12,7 @@ from typing import Any, Iterable
 from urllib import error, request
 
 import config as cfg
+from log.run import ensure_run_log_path, get_run_log_path, reset_run_log_path
 
 
 class LogLevel(IntEnum):
@@ -69,6 +70,7 @@ class Logger:
         server_url: str | None = None,
         server_timeout: float = 5.0,
         name: str = "selfagent",
+        bind_run: bool = False,
     ) -> None:
         self.name = name
         self.level = _parse_level(level)
@@ -77,6 +79,8 @@ class Logger:
         self.file_encoding = file_encoding
         self.server_url = server_url or ""
         self.server_timeout = server_timeout
+        # True：跟随本次进程运行日志文件（from_config）；False：固定 file_path
+        self.bind_run = bind_run
         self._lock = threading.Lock()
 
     @classmethod
@@ -84,14 +88,23 @@ class Logger:
         section = cfg.get_section("log", {}) or {}
         file_cfg = section.get("file") or {}
         server_cfg = section.get("server") or {}
+        encoding = str(file_cfg.get("encoding") or "utf-8")
+        configured = file_cfg.get("path")
+        file_path: str | Path | None = None
+        bind_run = False
+        if configured:
+            # 每次进程运行使用独立文件，避免多实例共用 app.log
+            file_path = ensure_run_log_path(configured, encoding=encoding)
+            bind_run = True
         return cls(
             name=name,
             level=section.get("level", LogLevel.NOTICE),
             modes=section.get("modes", [LogMode.CONSOLE]),
-            file_path=file_cfg.get("path"),
-            file_encoding=file_cfg.get("encoding", "utf-8"),
+            file_path=file_path,
+            file_encoding=encoding,
             server_url=server_cfg.get("url") or "",
             server_timeout=float(server_cfg.get("timeout", 5.0)),
+            bind_run=bind_run,
         )
 
     def notice(self, message: str, **extra: Any) -> None:
@@ -146,11 +159,24 @@ class Logger:
         stream.write(line + "\n")
         stream.flush()
 
+    def _resolve_file_path(self) -> Path | None:
+        if not self.bind_run:
+            return self.file_path
+        existing = get_run_log_path()
+        if existing is not None:
+            return existing
+        configured = ((cfg.get_section("log", {}) or {}).get("file") or {}).get("path")
+        if not configured:
+            return None
+        return ensure_run_log_path(configured, encoding=self.file_encoding)
+
     def _write_file(self, line: str) -> None:
-        if not self.file_path:
+        target = self._resolve_file_path()
+        if target is None:
             return
-        self.file_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.file_path.open("a", encoding=self.file_encoding) as f:
+        self.file_path = target
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("a", encoding=self.file_encoding) as f:
             f.write(line + "\n")
 
     def _write_server(self, record: dict[str, Any]) -> None:
@@ -188,3 +214,4 @@ def get_logger(name: str = "selfagent") -> Logger:
 def reset_logger() -> None:
     global _default_logger
     _default_logger = None
+    reset_run_log_path()

@@ -5,7 +5,7 @@ SelfAgent：面向各类项目的 Python 智能体基础框架，按层解耦：
 | 层级 | 能力 |
 |------|------|
 | 环境层 | 按「配置 / 用户环境变量 / 系统环境变量 / 进程环境」查找（可选回退） |
-| 日志层 | 提醒 / 警告 / 严重；控制台、本地文件、服务器上报 |
+| 日志层 | 提醒 / 警告 / 严重；控制台、本地文件、服务器上报；可选每次问答独立日志 |
 | 飞书层 | 自定义机器人 Webhook 推送（文本 / Markdown 卡片 / 富文本） |
 | AI 层 | 统一客户端接口，按配置选择模型；当前实现 DeepSeek |
 | ReAct 层 | Thought → Action → Observation；Plan Mode；连续对话 |
@@ -78,6 +78,10 @@ print(result.answer)
 ```bash
 python examples/quickstart.py
 ```
+
+## 运行日志隔离
+
+启用 `log.modes` 含 `file` 时，每次进程运行写入独立文件（`logs/runs/时间_pid.log`），互不混写。`log.file.path`（如 `logs/app.log`）仅用于确定目录。可用 `get_run_log_path()` 查看本次路径。
 
 ## 过程细节开关
 

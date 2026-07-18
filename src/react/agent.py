@@ -545,12 +545,16 @@ class ReActAgent:
         )
 
     def _emit_step(self, step: ReActStep) -> None:
-        if self.detail == DETAIL_OFF or not self.stream_detail:
+        if self.detail == DETAIL_OFF:
             return
         text = format_step_detail(
             step, self.detail, max_chars=self.detail_max_chars
         )
         if not text:
+            return
+        # 始终落盘到本次运行日志；控制台/回调仅在 stream_detail 时输出
+        logger.notice(f"ReAct 细节\n{text}")
+        if not self.stream_detail:
             return
         if self.on_detail is not None:
             self.on_detail(text)
