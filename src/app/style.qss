@@ -393,23 +393,22 @@ QToolButton#ModePill::menu-indicator {
     width: 0;
 }
 
-/* Agent/Plan 下拉：对齐 Cursor 深色菜单 */
+/* Agent/Plan 上拉菜单：窄、椭圆角 */
 QMenu#ModeMenu {
     background: #2A2A2A;
     border: 1px solid #3C3C3C;
-    border-radius: 10px;
-    padding: 6px;
+    border-radius: 14px;
+    padding: 4px;
     color: #F0F0F0;
 }
 
 QMenu#ModeMenu::item {
-    padding: 9px 16px 9px 14px;
-    border-radius: 6px;
+    padding: 6px 10px;
+    border-radius: 10px;
     margin: 1px 0;
-    min-width: 168px;
     background: transparent;
     color: #F0F0F0;
-    font-size: 13px;
+    font-size: 12px;
 }
 
 QMenu#ModeMenu::item:selected {

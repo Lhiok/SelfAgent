@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtGui import QAction, QKeySequence, QShortcut, QTextCursor
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -134,10 +134,11 @@ class ChatPane(QWidget):
         self._mode = "agent"
         self.btn_mode = QToolButton()
         self.btn_mode.setObjectName("ModePill")
-        self.btn_mode.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.btn_mode.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-        self._mode_menu = QMenu(self.btn_mode)
+        self.btn_mode.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._mode_menu = QMenu(self)
         self._mode_menu.setObjectName("ModeMenu")
+        self._mode_menu.setFixedWidth(118)
         self._act_agent = QAction(self._mode_menu)
         self._act_plan = QAction(self._mode_menu)
         for act in (self._act_agent, self._act_plan):
@@ -146,7 +147,7 @@ class ChatPane(QWidget):
         self._act_plan.triggered.connect(lambda: self._emit_mode("plan"))
         self._mode_menu.addAction(self._act_agent)
         self._mode_menu.addAction(self._act_plan)
-        self.btn_mode.setMenu(self._mode_menu)
+        self.btn_mode.clicked.connect(self._show_mode_menu)
         self._paint_mode_pill()
         tools.addWidget(self.btn_mode)
 
@@ -194,20 +195,25 @@ class ChatPane(QWidget):
 
     def _paint_mode_pill(self) -> None:
         label = "Plan" if self._mode == "plan" else "Agent"
-        self.btn_mode.setText(f"∞  {label}  ▾")
+        self.btn_mode.setText(f"∞ {label} ▾")
         self._act_agent.blockSignals(True)
         self._act_plan.blockSignals(True)
         self._act_agent.setChecked(self._mode == "agent")
         self._act_plan.setChecked(self._mode == "plan")
-        # 文案 + 右侧勾选，对齐 Cursor 菜单
-        self._act_agent.setText(
-            "∞    Agent" + ("          ✓" if self._mode == "agent" else "             ")
-        )
-        self._act_plan.setText(
-            "☰    Plan" + ("            ✓" if self._mode == "plan" else "               ")
-        )
+        self._act_agent.setText("∞  Agent" + ("  ✓" if self._mode == "agent" else ""))
+        self._act_plan.setText("☰  Plan" + ("   ✓" if self._mode == "plan" else ""))
         self._act_agent.blockSignals(False)
         self._act_plan.blockSignals(False)
+
+    def _show_mode_menu(self) -> None:
+        """在胶囊上方弹出，圆角窄菜单。"""
+        self._paint_mode_pill()
+        self._mode_menu.adjustSize()
+        btn = self.btn_mode
+        global_tl = btn.mapToGlobal(QPoint(0, 0))
+        mh = self._mode_menu.sizeHint().height()
+        # 与胶囊左对齐，向上展开并留出空隙
+        self._mode_menu.exec(QPoint(global_tl.x(), global_tl.y() - mh - 6))
 
     def _emit_mode(self, mode: str) -> None:
         self._mode = mode
