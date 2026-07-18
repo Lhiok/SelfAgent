@@ -46,7 +46,7 @@ react:
     max_history_messages: 40
     # 是否在后续轮次注入“连续对话”提示
     inject_hint: true
-    # 非空则每轮自动持久化到该目录
+    # 会话持久化目录；空则默认 logs/sessions（支持 --resume / /load）
     persist_dir: ""
   plan:
     # Plan Mode 下是否允许只读工具探测

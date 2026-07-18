@@ -1,5 +1,10 @@
 ﻿from react.agent import ActionCall, PlanResult, ReActAgent, ReActResult, ReActStep
-from react.conversation import Conversation, ConversationState, TurnRecord
+from react.conversation import (
+    DEFAULT_PERSIST_DIR,
+    Conversation,
+    ConversationState,
+    TurnRecord,
+)
 from react.detail import (
     DETAIL_FULL,
     DETAIL_LEVELS,
@@ -18,6 +23,7 @@ __all__ = [
     "AgentMode",
     "Conversation",
     "ConversationState",
+    "DEFAULT_PERSIST_DIR",
     "DETAIL_FULL",
     "DETAIL_LEVELS",
     "DETAIL_OFF",

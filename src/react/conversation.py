@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,8 @@ from react.mode import AgentMode
 from react.plan import Plan
 
 logger = get_logger("react.conversation")
+
+DEFAULT_PERSIST_DIR = Path("logs/sessions")
 
 _CONTINUOUS_HINT = (
     "[连续对话] 请结合此前对话与已确认约束继续执行；"
@@ -48,7 +51,7 @@ class Conversation:
 
     - chat(): 带历史继续对话 / 执行任务
     - confirm_plan(): 执行上一轮产出的计划
-    - reset() / save() / load()
+    - reset() / save() / load() / resume() / list_sessions()
     """
 
     def __init__(
@@ -75,13 +78,17 @@ class Conversation:
             if inject_continuous_hint is not None
             else bool(conv_cfg.get("inject_hint", True))
         )
-        configured_dir = persist_dir if persist_dir is not None else conv_cfg.get("persist_dir")
-        self.persist_dir = Path(configured_dir) if configured_dir else None
+        if persist_dir is not None:
+            self.persist_dir = Path(persist_dir) if str(persist_dir).strip() else None
+        else:
+            raw = conv_cfg.get("persist_dir")
+            self.persist_dir = Path(raw) if raw else DEFAULT_PERSIST_DIR
 
         self.messages: list[AIMessage] = []
         self.turns: list[TurnRecord] = []
         self.pending_plan: Plan | None = None
         self.metadata: dict[str, Any] = {}
+        self.last_save_path: Path | None = None
 
     @property
     def turn_count(self) -> int:
@@ -196,8 +203,17 @@ class Conversation:
         """持久化会话到 JSON。"""
         target = Path(path) if path else self._default_persist_path()
         target.parent.mkdir(parents=True, exist_ok=True)
+        if self.persist_dir is None:
+            self.persist_dir = target.parent
+        now = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+        preview = ""
+        if self.turns:
+            preview = self.turns[0].user.replace("\n", " ").strip()[:80]
         payload = {
             "session_id": self.session_id,
+            "updated_at": now,
+            "preview": preview,
+            "workdir": str(self.agent.workdir) if getattr(self.agent, "workdir", None) else "",
             "messages": [{"role": m.role, "content": m.content, "name": m.name} for m in self.messages],
             "turns": [
                 {
@@ -215,8 +231,107 @@ class Conversation:
             "agent_mode": self.agent.mode.value,
         }
         target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.last_save_path = target
         logger.notice(f"会话已保存: {target}")
         return target
+
+    def resume(self, path: str | Path) -> "Conversation":
+        """从历史文件恢复到当前实例（沿用 load 后的 agent，含 workdir/mode）。"""
+        loaded = Conversation.load(path, agent=self.agent)
+        self.agent = loaded.agent
+        self.session_id = loaded.session_id
+        self.messages = loaded.messages
+        self.turns = loaded.turns
+        self.pending_plan = loaded.pending_plan
+        self.metadata = loaded.metadata
+        self.last_save_path = Path(path).resolve()
+        if self.persist_dir is None:
+            self.persist_dir = self.last_save_path.parent
+        elif loaded.persist_dir is not None:
+            self.persist_dir = loaded.persist_dir
+        logger.notice(
+            f"已从历史恢复: {self.last_save_path} "
+            f"(session={self.session_id[:8]}, turns={self.turn_count})"
+        )
+        return self
+
+    @classmethod
+    def resolve_session_path(
+        cls,
+        ref: str,
+        *,
+        persist_dir: str | Path | None = None,
+    ) -> Path:
+        """
+        解析会话引用：文件路径 / session_id / 前缀 / latest。
+        """
+        text = (ref or "").strip()
+        if not text:
+            raise FileNotFoundError("未指定会话")
+
+        direct = Path(text).expanduser()
+        if direct.is_file():
+            return direct.resolve()
+
+        base = cls._resolve_persist_dir(persist_dir)
+        if text.lower() in {"latest", "last", "-"}:
+            items = cls.list_sessions(base)
+            if not items:
+                raise FileNotFoundError(f"目录中没有可恢复的会话: {base}")
+            return Path(items[0]["path"])
+
+        exact = base / f"{text}.json"
+        if exact.is_file():
+            return exact.resolve()
+
+        # 前缀匹配 session_id
+        matches = sorted(base.glob(f"{text}*.json"))
+        if len(matches) == 1:
+            return matches[0].resolve()
+        if len(matches) > 1:
+            raise FileNotFoundError(
+                f"会话前缀 {text!r} 匹配到多个文件，请写更长一点: "
+                + ", ".join(p.stem[:12] for p in matches[:5])
+            )
+        raise FileNotFoundError(f"未找到会话: {text}（目录 {base}）")
+
+    @classmethod
+    def list_sessions(
+        cls,
+        persist_dir: str | Path | None = None,
+        *,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """列出历史会话（按更新时间倒序）。"""
+        base = cls._resolve_persist_dir(persist_dir)
+        if not base.is_dir():
+            return []
+
+        items: list[dict[str, Any]] = []
+        for path in base.glob("*.json"):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            turns = data.get("turns") or []
+            mtime = datetime.fromtimestamp(path.stat().st_mtime).astimezone()
+            items.append(
+                {
+                    "path": str(path.resolve()),
+                    "session_id": str(data.get("session_id") or path.stem),
+                    "turn_count": len(turns),
+                    "preview": str(data.get("preview") or (turns[0].get("user") if turns else "") or "")[:80],
+                    "workdir": str(data.get("workdir") or ""),
+                    "updated_at": str(data.get("updated_at") or mtime.isoformat(timespec="seconds")),
+                    "mtime": mtime.timestamp(),
+                }
+            )
+        items.sort(key=lambda x: x["mtime"], reverse=True)
+        if limit > 0:
+            items = items[:limit]
+        for item in items:
+            item.pop("mtime", None)
+        return items
 
     @classmethod
     def load(
@@ -224,9 +339,16 @@ class Conversation:
         path: str | Path,
         *,
         agent: ReActAgent | None = None,
+        persist_dir: str | Path | None = None,
     ) -> "Conversation":
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
-        conv = cls(agent=agent, session_id=str(data.get("session_id") or uuid.uuid4()))
+        target = Path(path).expanduser().resolve()
+        data = json.loads(target.read_text(encoding="utf-8"))
+        save_dir = persist_dir if persist_dir is not None else target.parent
+        conv = cls(
+            agent=agent,
+            session_id=str(data.get("session_id") or uuid.uuid4()),
+            persist_dir=save_dir,
+        )
         conv.messages = [
             AIMessage(
                 role=m.get("role", "user"),
@@ -268,7 +390,26 @@ class Conversation:
         mode = data.get("agent_mode")
         if mode:
             conv.set_mode(mode)
+        workdir = str(data.get("workdir") or "").strip()
+        if workdir:
+            try:
+                conv.set_workdir(workdir)
+            except (OSError, ValueError) as exc:
+                logger.warning(f"恢复工作目录失败 ({workdir}): {exc}")
+        conv.last_save_path = target
+        logger.notice(
+            f"会话已加载: {target} (session={conv.session_id[:8]}, turns={conv.turn_count})"
+        )
         return conv
+
+    @classmethod
+    def _resolve_persist_dir(cls, persist_dir: str | Path | None = None) -> Path:
+        if persist_dir is not None and str(persist_dir).strip():
+            return Path(persist_dir).expanduser().resolve()
+        react_cfg = cfg.get_section("react", {}) or {}
+        conv_cfg = react_cfg.get("conversation") or {}
+        raw = conv_cfg.get("persist_dir")
+        return Path(raw).expanduser().resolve() if raw else DEFAULT_PERSIST_DIR.resolve()
 
     def _log_turn_separator(
         self,
@@ -326,5 +467,5 @@ class Conversation:
         logger.notice(f"会话历史已裁剪至 {len(self.messages)} 条")
 
     def _default_persist_path(self) -> Path:
-        base = self.persist_dir or Path("logs/sessions")
-        return base / f"{self.session_id}.json"
+        base = self.persist_dir or DEFAULT_PERSIST_DIR
+        return Path(base) / f"{self.session_id}.json"

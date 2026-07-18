@@ -167,9 +167,9 @@ agent = ReActAgent(permission=guard)
 
 未配置 `permission` 节时默认不限权。
 
-## 连续对话
+## 连续对话与历史恢复
 
-用 `Conversation` 保持多轮上下文，适合把一个任务拆成多轮推进：
+用 `Conversation` 保持多轮上下文；默认自动保存到 `logs/sessions/`。
 
 ```python
 from react import Conversation, ReActAgent
@@ -178,15 +178,24 @@ conv = Conversation(ReActAgent())
 print(conv.chat("先查看项目结构").answer)
 print(conv.chat("根据刚才结果，再读 README").answer)  # 带历史
 conv.confirm_plan()  # 若上一轮产出了计划
-conv.reset()
-# conv.save() / Conversation.load(path)
+
+# 恢复
+path = Conversation.resolve_session_path("latest")
+conv2 = Conversation.load(path, agent=ReActAgent())
+# 或: conv.resume(path)
+Conversation.list_sessions()  # 列出历史
 ```
 
 交互示例：
 
 ```bash
 python examples/chat_session.py
+python examples/chat_session.py --list-sessions
+python examples/chat_session.py --resume latest
+python examples/chat_session.py --resume 2723e299
 ```
+
+会话内命令：`/sessions`、`/load <路径|id|latest>`、`/save`。
 
 ## Plan Mode
 
