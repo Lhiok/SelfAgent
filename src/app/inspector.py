@@ -21,14 +21,14 @@ class Inspector(QWidget):
         super().__init__(parent)
         self.setObjectName("Inspector")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 14, 12, 12)
-        layout.setSpacing(10)
-        caption = QLabel("检视")
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+        caption = QLabel("OUTPUT")
         caption.setObjectName("PanelCaption")
         head = QHBoxLayout()
-        self.title = QLabel("未选择")
+        self.title = QLabel("Nothing selected")
         self.title.setObjectName("SessionTitle")
-        self.btn_open = QPushButton("打开文件")
+        self.btn_open = QPushButton("Open")
         self.btn_open.setObjectName("GhostButton")
         self.btn_open.setEnabled(False)
         self.btn_open.clicked.connect(self._open_path)
@@ -49,7 +49,7 @@ class Inspector(QWidget):
         self._path: str | None = None
 
     def clear(self) -> None:
-        self.title.setText("未选择")
+        self.title.setText("Nothing selected")
         self.view.clear()
         self._path = None
         self.btn_open.setEnabled(False)

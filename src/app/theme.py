@@ -1,4 +1,4 @@
-"""桌面主题：加载 QSS 与字体。"""
+"""桌面主题：Cursor / Codex 风格深色客户端。"""
 
 from __future__ import annotations
 
@@ -18,101 +18,119 @@ def apply_theme(app: QApplication) -> None:
     app.setFont(font)
 
 
+# Flat transcript — closer to Cursor Agent / Codex chat (no chat bubbles)
 CHAT_DOC_CSS = """
 body {
   font-family: 'Segoe UI', 'Microsoft YaHei UI', sans-serif;
   font-size: 13px;
-  color: #1A2428;
+  color: #CCCCCC;
   margin: 0;
-  padding: 8px 12px 24px 12px;
-  background: transparent;
-  line-height: 1.45;
+  padding: 12px 20px 28px 20px;
+  background: #181818;
+  line-height: 1.55;
 }
 .msg {
-  margin: 0 0 14px 0;
-  max-width: 92%;
-}
-.msg.user {
-  margin-left: auto;
-}
-.bubble {
-  border-radius: 14px;
-  padding: 10px 14px;
-  display: block;
-}
-.user .bubble {
-  background: #C5E4E3;
-  color: #123335;
-  border-top-right-radius: 4px;
-}
-.assistant .bubble {
-  background: #FFFFFF;
-  border: 1px solid #D0DBE3;
-  border-top-left-radius: 4px;
-}
-.error .bubble {
-  background: #F8EAEA;
-  border: 1px solid #D4A0A0;
-  color: #7A2E2E;
+  margin: 0 0 18px 0;
+  max-width: 52rem;
 }
 .role {
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.4px;
-  color: #5C6B73;
-  margin: 0 0 4px 2px;
+  letter-spacing: 0.3px;
+  color: #6E6E6E;
+  margin: 0 0 6px 0;
+  text-transform: uppercase;
 }
-.user .role { text-align: right; color: #0D7377; }
+.user .role { color: #3794FF; }
+.assistant .role { color: #89D185; }
+.error .role { color: #F48771; }
+.bubble {
+  color: #D4D4D4;
+  white-space: normal;
+}
+.user .bubble { color: #E0E0E0; }
+.error .bubble { color: #F48771; }
 .meta {
-  color: #5C6B73;
+  color: #6E6E6E;
   font-size: 12px;
-  margin: 6px 0;
+  margin: 6px 0 10px 0;
 }
+.meta a {
+  color: #3794FF;
+  text-decoration: none;
+}
+.meta a:hover { text-decoration: underline; }
 .live {
-  background: #FFFFFF;
-  border: 1px dashed #0D7377;
-  border-radius: 14px;
-  padding: 10px 14px;
-  margin-bottom: 14px;
+  margin: 0 0 18px 0;
+  padding: 10px 0 4px 12px;
+  border-left: 2px solid #3794FF;
+  max-width: 52rem;
 }
+.live .role { color: #3794FF; }
 .step {
   margin: 8px 0;
   padding: 8px 10px;
-  background: #F0F5F6;
-  border-radius: 8px;
-  border-left: 3px solid #0D7377;
+  background: #1E1E1E;
+  border: 1px solid #2B2B2B;
+  border-radius: 5px;
 }
-.step-title { font-weight: 600; color: #0D7377; font-size: 12px; }
-.thought { color: #3D4F57; font-style: italic; margin-top: 4px; }
+.step-title {
+  font-weight: 600;
+  color: #9D9D9D;
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+.thought {
+  color: #858585;
+  font-style: italic;
+  margin-top: 4px;
+  font-size: 12px;
+}
 .chip {
   display: inline-block;
-  background: #E2EEF0;
-  color: #1A2428;
-  border-radius: 6px;
-  padding: 2px 8px;
-  margin: 3px 4px 0 0;
-  font-family: Consolas, monospace;
+  background: #252526;
+  color: #B0B0B0;
+  border: 1px solid #3C3C3C;
+  border-radius: 4px;
+  padding: 1px 7px;
+  margin: 4px 4px 0 0;
+  font-family: 'Cascadia Mono', Consolas, monospace;
   font-size: 11px;
 }
 .changes {
-  margin: 8px 0;
+  margin: 8px 0 12px 0;
   padding: 8px 10px;
-  background: #EEF2F5;
-  border-radius: 8px;
+  background: #1E1E1E;
+  border: 1px solid #2B2B2B;
+  border-radius: 5px;
+  font-size: 12px;
 }
-.changes a { color: #0D7377; text-decoration: none; font-weight: 600; }
+.changes a { color: #3794FF; text-decoration: none; }
 .changes a:hover { text-decoration: underline; }
 .plan-box {
-  margin: 10px 0;
+  margin: 10px 0 14px 0;
   padding: 10px 12px;
-  background: #FFF8E8;
-  border: 1px solid #E6D19A;
-  border-radius: 10px;
+  background: #1E1E1E;
+  border: 1px solid #3C3C3C;
+  border-left: 2px solid #CCA700;
+  border-radius: 5px;
+  color: #D4D4D4;
+  max-width: 52rem;
 }
 .empty {
-  color: #8A969E;
-  text-align: center;
-  margin-top: 48px;
+  color: #6E6E6E;
+  text-align: left;
+  margin-top: 64px;
+  font-size: 13px;
+  line-height: 1.7;
+  max-width: 28rem;
+}
+.empty b {
+  color: #9D9D9D;
+  font-weight: 600;
+  display: block;
+  margin-bottom: 6px;
   font-size: 14px;
 }
 """
