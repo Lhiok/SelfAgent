@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "selfagent"
 version = "0.1.0"
-description = "SelfAgent 通用智能体基础框架：环境、日志、飞书、AI、ReAct、Skill、权限、回归"
+description = "SelfAgent Windows ????????????"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -22,12 +22,16 @@ skills = [
     "Pillow>=10.0.0",
     "playwright>=1.40.0",
 ]
+app = [
+    "PySide6>=6.6.0",
+]
 all = [
-    "selfagent[dev,skills]",
+    "selfagent[dev,skills,app]",
 ]
 
 [project.scripts]
 selfagent-regression = "regression.__main__:main"
+selfagent-app = "app.__main__:main"
 
 [tool.setuptools]
 py-modules = ["config"]
