@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import QPoint, Qt, Signal
-from PySide6.QtGui import QAction, QKeySequence, QShortcut, QTextCursor
+from PySide6.QtGui import QKeySequence, QShortcut, QTextCursor
 from PySide6.QtWidgets import (
+    QFrame,
     QHBoxLayout,
     QLabel,
-    QMenu,
     QProgressBar,
     QPushButton,
     QTextBrowser,
@@ -20,6 +20,60 @@ from PySide6.QtWidgets import (
 )
 
 from app.theme import diff_line_stats, wrap_chat_html
+
+
+class ModePopup(QFrame):
+    """无圆角透明弹层，避免 QMenu 在 Windows 上露出黑色方底。"""
+
+    mode_picked = Signal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(
+            parent,
+            Qt.WindowType.Popup
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.NoDropShadowWindowHint,
+        )
+        self.setObjectName("ModePopup")
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setFixedWidth(118)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        panel = QFrame()
+        panel.setObjectName("ModePopupPanel")
+        col = QVBoxLayout(panel)
+        col.setContentsMargins(4, 4, 4, 4)
+        col.setSpacing(2)
+
+        self.btn_agent = QPushButton("∞  Agent")
+        self.btn_plan = QPushButton("☰  Plan")
+        for btn, mode in ((self.btn_agent, "agent"), (self.btn_plan, "plan")):
+            btn.setObjectName("ModePopupItem")
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setCheckable(True)
+            btn.clicked.connect(lambda _=False, m=mode: self._pick(m))
+            col.addWidget(btn)
+        outer.addWidget(panel)
+
+    def set_current(self, mode: str) -> None:
+        is_plan = mode == "plan"
+        self.btn_agent.setChecked(not is_plan)
+        self.btn_plan.setChecked(is_plan)
+        self.btn_agent.setText("∞  Agent" + ("  ✓" if not is_plan else ""))
+        self.btn_plan.setText("☰  Plan" + ("   ✓" if is_plan else ""))
+
+    def _pick(self, mode: str) -> None:
+        self.mode_picked.emit(mode)
+        self.hide()
+
+    def popup_above(self, anchor: QWidget) -> None:
+        self.adjustSize()
+        g = anchor.mapToGlobal(QPoint(0, 0))
+        self.move(g.x(), g.y() - self.sizeHint().height() - 6)
+        self.show()
+        self.raise_()
+        self.activateWindow()
 
 
 class ChatPane(QWidget):
@@ -136,17 +190,8 @@ class ChatPane(QWidget):
         self.btn_mode.setObjectName("ModePill")
         self.btn_mode.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.btn_mode.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._mode_menu = QMenu(self)
-        self._mode_menu.setObjectName("ModeMenu")
-        self._mode_menu.setFixedWidth(118)
-        self._act_agent = QAction(self._mode_menu)
-        self._act_plan = QAction(self._mode_menu)
-        for act in (self._act_agent, self._act_plan):
-            act.setCheckable(True)
-        self._act_agent.triggered.connect(lambda: self._emit_mode("agent"))
-        self._act_plan.triggered.connect(lambda: self._emit_mode("plan"))
-        self._mode_menu.addAction(self._act_agent)
-        self._mode_menu.addAction(self._act_plan)
+        self._mode_popup = ModePopup(self)
+        self._mode_popup.mode_picked.connect(self._emit_mode)
         self.btn_mode.clicked.connect(self._show_mode_menu)
         self._paint_mode_pill()
         tools.addWidget(self.btn_mode)
@@ -196,24 +241,12 @@ class ChatPane(QWidget):
     def _paint_mode_pill(self) -> None:
         label = "Plan" if self._mode == "plan" else "Agent"
         self.btn_mode.setText(f"∞ {label} ▾")
-        self._act_agent.blockSignals(True)
-        self._act_plan.blockSignals(True)
-        self._act_agent.setChecked(self._mode == "agent")
-        self._act_plan.setChecked(self._mode == "plan")
-        self._act_agent.setText("∞  Agent" + ("  ✓" if self._mode == "agent" else ""))
-        self._act_plan.setText("☰  Plan" + ("   ✓" if self._mode == "plan" else ""))
-        self._act_agent.blockSignals(False)
-        self._act_plan.blockSignals(False)
+        self._mode_popup.set_current(self._mode)
 
     def _show_mode_menu(self) -> None:
-        """在胶囊上方弹出，圆角窄菜单。"""
+        """在胶囊上方弹出圆角窄菜单（无透明底，无黑方块）。"""
         self._paint_mode_pill()
-        self._mode_menu.adjustSize()
-        btn = self.btn_mode
-        global_tl = btn.mapToGlobal(QPoint(0, 0))
-        mh = self._mode_menu.sizeHint().height()
-        # 与胶囊左对齐，向上展开并留出空隙
-        self._mode_menu.exec(QPoint(global_tl.x(), global_tl.y() - mh - 6))
+        self._mode_popup.popup_above(self.btn_mode)
 
     def _emit_mode(self, mode: str) -> None:
         self._mode = mode

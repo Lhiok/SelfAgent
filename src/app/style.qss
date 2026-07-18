@@ -393,39 +393,35 @@ QToolButton#ModePill::menu-indicator {
     width: 0;
 }
 
-/* Agent/Plan 上拉菜单：窄、椭圆角 */
-QMenu#ModeMenu {
+/* Agent/Plan 上拉：透明窗 + 圆角面板（无黑方底） */
+QFrame#ModePopup {
+    background: transparent;
+    border: none;
+}
+
+QFrame#ModePopupPanel {
     background: #2A2A2A;
     border: 1px solid #3C3C3C;
     border-radius: 14px;
-    padding: 4px;
-    color: #F0F0F0;
 }
 
-QMenu#ModeMenu::item {
-    padding: 6px 10px;
-    border-radius: 10px;
-    margin: 1px 0;
+QPushButton#ModePopupItem {
     background: transparent;
+    border: none;
+    border-radius: 10px;
+    padding: 6px 10px;
     color: #F0F0F0;
     font-size: 12px;
+    text-align: left;
+    min-height: 26px;
 }
 
-QMenu#ModeMenu::item:selected {
+QPushButton#ModePopupItem:hover {
     background: #3A3A3A;
 }
 
-QMenu#ModeMenu::item:checked {
+QPushButton#ModePopupItem:checked {
     background: #333333;
-}
-
-QMenu#ModeMenu::indicator {
-    width: 0;
-    height: 0;
-}
-
-QMenu#ModeMenu::right-arrow {
-    width: 0;
 }
 
 QPushButton#SendCircle {
