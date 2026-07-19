@@ -25,6 +25,8 @@ ai:
     timeout: 180.0
     # 超时/网络错误时额外重试次数
     retries: 1
+    # 是否优先 SSE 流式（失败自动降级为非流式）
+    stream: true
 
 feishu:
   webhook_url: ""
@@ -48,10 +50,20 @@ react:
   conversation:
     # 连续对话保留的最大消息条数（不含 system）
     max_history_messages: 40
+    # 超过该条数时压缩较早上下文（0=禁用摘要压缩，仍受 max_history 硬裁剪）
+    compact_after_messages: 32
+    # 压缩时保留的最近消息条数
+    compact_keep_recent: 12
     # 是否在后续轮次注入“连续对话”提示
     inject_hint: true
     # 会话持久化目录；空则默认 logs/sessions（支持 --resume / /load）
     persist_dir: ""
+  # 工具空转防护：重复同一 Action 或连续失败时干预/停止
+  doom_loop:
+    window: 6
+    repeat_limit: 3
+    fail_limit: 3
+    warn_once: true
   plan:
     # Plan Mode 下是否允许只读工具探测
     allow_readonly_tools: true
@@ -87,6 +99,9 @@ react:
     工具之间互不依赖时可一次规划多个调用；需要上一步结果时再分步调用。
 
 skills:
+  # 工具 Observation 进入模型前的统一截断（0 或不写 max_bytes 表示不按字节截断）
+  output_max_chars: 20000
+  # output_max_bytes: 65536
   local_file:
     # 允许读写的根目录，默认当前工作目录
     root: "."

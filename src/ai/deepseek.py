@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterable
+import json
+from typing import Any, Iterable, Iterator
 
 import httpx
 
-from ai.base import AIClient, AIMessage, AIResponse, ChatOptions
+from ai.base import AIClient, AIMessage, AIResponse, ChatOptions, StreamEvent
 from env import get_env
 from log import get_logger
 
@@ -145,3 +146,71 @@ class DeepSeekClient(AIClient):
             raw=data,
             usage=data.get("usage") or {},
         )
+
+    def chat_stream(
+        self,
+        messages: Iterable[AIMessage],
+        options: ChatOptions | None = None,
+    ) -> Iterator[str | StreamEvent]:
+        options = options or ChatOptions()
+        if not self.api_key:
+            raise RuntimeError("DeepSeek API Key 未配置，无法发起请求")
+
+        model = options.model or self.model
+        body: dict[str, Any] = {
+            "model": model,
+            "stream": True,
+            "messages": [
+                {"role": m.role, "content": m.content, **({"name": m.name} if m.name else {})}
+                for m in messages
+            ],
+        }
+        if options.temperature is not None:
+            body["temperature"] = options.temperature
+        if options.max_tokens is not None:
+            body["max_tokens"] = options.max_tokens
+        if options.extra:
+            body.update(options.extra)
+            body["stream"] = True
+
+        url = f"{self.base_url}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        }
+        logger.notice(f"流式请求 DeepSeek: model={model}")
+
+        with httpx.Client(timeout=self.timeout) as client:
+            with client.stream("POST", url, headers=headers, json=body) as resp:
+                if resp.status_code >= 400:
+                    raw = resp.read()
+                    try:
+                        data = json.loads(raw)
+                    except Exception:  # noqa: BLE001
+                        data = {"raw": raw.decode("utf-8", errors="replace")}
+                    logger.critical(f"DeepSeek HTTP {resp.status_code}: {data}")
+                    raise RuntimeError(f"DeepSeek 错误: {data}")
+
+                for line in resp.iter_lines():
+                    if not line:
+                        continue
+                    if line.startswith(":"):
+                        continue
+                    if not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if payload == "[DONE]":
+                        yield StreamEvent(text="", done=True)
+                        return
+                    try:
+                        chunk = json.loads(payload)
+                    except json.JSONDecodeError:
+                        continue
+                    try:
+                        delta = chunk["choices"][0].get("delta") or {}
+                        text = delta.get("content") or ""
+                    except (KeyError, IndexError, TypeError):
+                        continue
+                    if text:
+                        yield StreamEvent(text=text, done=False)

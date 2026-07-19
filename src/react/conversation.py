@@ -14,6 +14,7 @@ from ai import AIMessage
 from log import get_logger
 from react.agent import ReActAgent, ReActResult
 from react.changes import collect_changes_from_steps
+from react.compaction import compact_messages, compaction_settings
 from react.mode import AgentMode
 from react.plan import Plan
 from skills.ask_user import collect_ask_answers_from_steps
@@ -77,6 +78,9 @@ class Conversation:
             if max_history_messages is not None
             else int(conv_cfg.get("max_history_messages", 40))
         )
+        self.compact_after_messages, self.compact_keep_recent = compaction_settings(
+            conv_cfg
+        )
         self.inject_continuous_hint = (
             inject_continuous_hint
             if inject_continuous_hint is not None
@@ -98,13 +102,47 @@ class Conversation:
     def turn_count(self) -> int:
         return len(self.turns)
 
+    def cancel(self) -> None:
+        """请求取消当前正在执行的 turn。"""
+        self.agent.control.cancel()
+
+    def enqueue(self, text: str) -> None:
+        """向当前 turn 队列中途补充用户消息（步间注入）。"""
+        self.agent.control.enqueue(text)
+
+    def compact_now(self, *, use_ai: bool = True) -> int:
+        """手动压缩历史；返回压缩后的消息条数。"""
+        before = len(self.messages)
+        self.messages = compact_messages(
+            self.messages,
+            ai=self.agent.ai if use_ai else None,
+            compact_after=1 if before > self.compact_keep_recent else 0,
+            keep_recent=self.compact_keep_recent,
+        )
+        self._trim_history()
+        if self.persist_dir is not None:
+            self.save()
+        logger.notice(f"手动压缩会话: {before} -> {len(self.messages)}")
+        return len(self.messages)
+
     def chat(self, user_input: str, *, mode: str | AgentMode | None = None) -> ReActResult:
         """发送一轮用户消息，基于历史继续执行。"""
         text = (user_input or "").strip()
         if not text:
             return ReActResult(answer="空输入，已忽略", completed=False, mode=self.agent.mode.value)
 
+        # 若上一轮仍在跑，则入队而非开新 turn
+        if self.agent.control.is_running:
+            self.enqueue(text)
+            return ReActResult(
+                answer="已加入当前任务队列，将在下一步注入。",
+                completed=False,
+                mode=self.agent.mode.value,
+                stop_reason="enqueued",
+            )
+
         agent = self.agent.with_mode(mode) if mode is not None else self.agent
+        # with_mode 新建实例时共享同一 control
         history = list(self.messages)
         if self.inject_continuous_hint and history:
             history = [
@@ -124,7 +162,6 @@ class Conversation:
         if self.persist_dir is not None:
             self.save()
         return result
-
     def resume_after_ask(
         self,
         *,
@@ -505,6 +542,14 @@ class Conversation:
         )
 
     def _trim_history(self) -> None:
+        if self.compact_after_messages > 0:
+            self.messages = compact_messages(
+                self.messages,
+                ai=self.agent.ai,
+                compact_after=self.compact_after_messages,
+                keep_recent=self.compact_keep_recent,
+            )
+
         limit = self.max_history_messages
         if limit <= 0 or len(self.messages) <= limit:
             return
