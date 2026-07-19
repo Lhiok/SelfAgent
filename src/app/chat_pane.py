@@ -609,12 +609,15 @@ class ChatStream(QScrollArea):
         self._col.setSpacing(0)
         self._col.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.setWidget(self._host)
+        self._live_label: AdaptiveRichLabel | None = None
+        self._reflow_scheduled = False
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         self._reflow_host()
 
     def rebuild(self, parts: list[tuple[str, Any]]) -> None:
+        self._live_label = None
         while self._col.count():
             item = self._col.takeAt(0)
             w = item.widget()
@@ -651,10 +654,48 @@ class ChatStream(QScrollArea):
                 )
                 block.file_clicked.connect(self._on_change_file)
                 self._col.addWidget(block)
+            elif kind == "live":
+                lab = self._make_html(str(payload))
+                lab.setObjectName("LivePanel")
+                self._live_label = lab
+                self._col.addWidget(lab)
             else:
                 self._col.addWidget(self._make_html(str(payload)))
             prev_kind = kind
         QTimer.singleShot(0, self._after_rebuild)
+
+    def patch_live(self, html: str, *, scroll: bool = False) -> bool:
+        """就地更新直播区，避免整页重建造成卡顿/空白闪烁。"""
+        lab = self._live_label
+        if lab is None:
+            return False
+        try:
+            # 控件可能已 deleteLater
+            _ = lab.objectName()
+            lab.setText(wrap_chat_html(html))
+        except RuntimeError:
+            self._live_label = None
+            return False
+        self._schedule_reflow(scroll=scroll)
+        return True
+
+    def _schedule_reflow(self, *, scroll: bool = False) -> None:
+        if self._reflow_scheduled:
+            if scroll:
+                self._pending_scroll = True
+            return
+        self._reflow_scheduled = True
+        self._pending_scroll = scroll
+
+        def _run() -> None:
+            self._reflow_scheduled = False
+            do_scroll = getattr(self, "_pending_scroll", False)
+            self._pending_scroll = False
+            self._reflow_host()
+            if do_scroll:
+                self._scroll_bottom()
+
+        QTimer.singleShot(0, _run)
 
     def _after_rebuild(self) -> None:
         self._reflow_host()
@@ -988,6 +1029,11 @@ class ChatPane(QWidget):
         self._live_draft_step: int | None = None
         self._live_skills: list[dict[str, Any]] = []
         self._live_cancelled = False
+        self._live_dirty = False
+        self._live_flush_timer = QTimer(self)
+        self._live_flush_timer.setSingleShot(True)
+        self._live_flush_timer.setInterval(120)
+        self._live_flush_timer.timeout.connect(self._flush_live_panel)
 
     def set_busy(self, busy: bool) -> None:
         self._busy = busy
@@ -1111,17 +1157,19 @@ class ChatPane(QWidget):
         self._body_parts.append(
             ("live", "<div class='live'><div class='role'>助手 · 进行中</div></div>")
         )
-        self._refresh_live_panel()
+        # 首次进入直播必须整页构建，以挂上 LivePanel 引用
+        self._paint()
+        self._flush_live_panel()
 
     def update_live_status(self, message: str) -> None:
         self._live_status = message or self._live_status
-        self._refresh_live_panel()
+        self._schedule_live_refresh()
 
     def update_live_steps(self, steps: list[dict[str, Any]]) -> None:
         self._live_steps = steps
         self._live_draft = ""
         self._live_draft_step = None
-        self._refresh_live_panel()
+        self._flush_live_panel()
         all_ch: list[dict[str, Any]] = []
         for step in steps:
             all_ch.extend(c for c in (step.get("changes") or []) if isinstance(c, dict))
@@ -1139,7 +1187,12 @@ class ChatPane(QWidget):
         if step is not None:
             self._live_draft_step = step
         self._live_draft = (self._live_draft or "") + delta
-        self._refresh_live_panel()
+        if len(self._live_draft) > 1200:
+            self._live_draft = "…" + self._live_draft[-1199:]
+        # 思考中不展示草稿，跳过 UI 刷新（流式 token 极多，全量重绘会卡死）
+        if "思考" in (self._live_status or ""):
+            return
+        self._schedule_live_refresh()
 
     def update_skill_event(self, event: dict[str, Any]) -> None:
         name = str(event.get("skill") or "?")
@@ -1165,13 +1218,13 @@ class ChatPane(QWidget):
                 )
         if len(self._live_skills) > 12:
             self._live_skills = self._live_skills[-12:]
-        self._refresh_live_panel()
+        self._schedule_live_refresh()
 
     def mark_cancelled(self, message: str = "") -> None:
         self._live_cancelled = True
         self._live_status = message or "已取消本轮任务"
         self._live_draft = ""
-        self._refresh_live_panel()
+        self._flush_live_panel()
 
     def finish_live(self, answer: str, *, ok: bool = True) -> None:
         self._body_parts = _drop_live_parts(self._body_parts)
@@ -1309,25 +1362,51 @@ class ChatPane(QWidget):
             )
         return "<div class='meta'>" + "".join(chips) + "</div>"
 
-    def _refresh_live_panel(self) -> None:
+    def _schedule_live_refresh(self) -> None:
+        self._live_dirty = True
+        if not self._live_flush_timer.isActive():
+            self._live_flush_timer.start()
+
+    def _flush_live_panel(self) -> None:
+        self._live_dirty = False
+        if self._live_flush_timer.isActive():
+            self._live_flush_timer.stop()
+        self._refresh_live_panel()
+
+    def _build_live_html(self) -> str:
         role = "助手 · 已取消" if self._live_cancelled else "助手 · 进行中"
         parts = [
             f"<div class='live'><div class='role'>{role}</div>",
             f"<div class='meta'>{_escape(self._live_status or '处理中…')}</div>",
             self._format_live_skills(),
         ]
-        if self._live_draft and not self._live_cancelled:
+        # 思考阶段只展示短预览，避免整段 ReAct 原文把中间区撑空/卡顿
+        thinking = "思考" in (self._live_status or "")
+        if self._live_draft and not self._live_cancelled and not thinking:
             draft = self._live_draft
-            if len(draft) > 4000:
-                draft = "…" + draft[-3999:]
+            if len(draft) > 800:
+                draft = "…" + draft[-799:]
             parts.append(
                 "<div class='meta'><b>流式输出</b></div>"
-                f"<div class='thought' style='white-space:pre-wrap'>{_escape(draft)}</div>"
+                f"<div class='thought'>{_escape(draft)}</div>"
             )
         steps_html = self._format_live_steps()
         parts.append(steps_html or "")
         parts.append("</div>")
-        self._set_live_inner("".join(parts), role_included=True)
+        return "".join(parts)
+
+    def _refresh_live_panel(self) -> None:
+        live = self._build_live_html()
+        for i, (kind, _) in enumerate(self._body_parts):
+            if kind == "live":
+                self._body_parts[i] = ("live", live)
+                break
+        else:
+            self._body_parts.append(("live", live))
+        # 优先就地 patch；失败再整页重建
+        if self.view.patch_live(live, scroll=bool(self._live_steps)):
+            return
+        self._paint()
 
     def _set_live_inner(self, inner: str, *, role_included: bool = False) -> None:
         if role_included:
@@ -1338,14 +1417,14 @@ class ChatPane(QWidget):
                 "<div class='role'>助手 · 进行中</div>"
                 f"{inner}</div>"
             )
-        replaced = False
         for i, (kind, _) in enumerate(self._body_parts):
             if kind == "live":
                 self._body_parts[i] = ("live", live)
-                replaced = True
                 break
-        if not replaced:
+        else:
             self._body_parts.append(("live", live))
+        if self.view.patch_live(live):
+            return
         self._paint()
 
     def _paint(self) -> None:

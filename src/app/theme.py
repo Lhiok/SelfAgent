@@ -126,14 +126,16 @@ body {
   margin: 0;
   padding: 0 0 0 12px;
   border-left: 2px solid #C8C8C4;
-  width: 100%;
 }
 .live .role {
-  display: block;
   font-size: 12px;
   font-weight: 600;
   color: #8A8A8A;
   margin-bottom: 2px;
+}
+.live .meta {
+  margin: 0 0 4px 0;
+  line-height: 1.35;
 }
 .step {
   margin: 2px 0;
