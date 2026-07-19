@@ -843,6 +843,8 @@ class ChatStream(QScrollArea):
 
 class ChatPane(QWidget):
     send_requested = Signal(str)
+    cancel_requested = Signal()
+    enqueue_requested = Signal(str)
     confirm_plan_requested = Signal()
     open_ask_requested = Signal()
     change_clicked = Signal(dict, list)  # selected, group
@@ -980,18 +982,28 @@ class ChatPane(QWidget):
         # ("user"|"assistant"|"error"|"html"|"live"|"changes", payload)
         self._body_parts: list[tuple[str, Any]] = []
         self._live_steps: list[dict[str, Any]] = []
+        self._busy = False
+        self._live_status = ""
+        self._live_draft = ""
+        self._live_draft_step: int | None = None
+        self._live_skills: list[dict[str, Any]] = []
+        self._live_cancelled = False
 
     def set_busy(self, busy: bool) -> None:
-        self.btn_send.setEnabled(not busy)
-        self.input.setEnabled(not busy)
+        self._busy = busy
+        # 运行中仍可输入补充；发送钮变为停止
+        self.input.setEnabled(True)
+        self.btn_send.setEnabled(True)
         self.btn_confirm.setEnabled(not busy)
         self.btn_mode.setEnabled(not busy)
         if busy:
             self.btn_send.setText("■")
-            self.btn_send.setToolTip("运行中…")
+            self.btn_send.setToolTip("停止当前任务（有文字时 Ctrl+Enter 为中途补充）")
+            self.input.setPlaceholderText("运行中：输入补充后 Ctrl+Enter；或点 ■ 停止")
         else:
             self.btn_send.setText("↑")
             self.btn_send.setToolTip("发送（Ctrl+Enter）")
+            self.input.setPlaceholderText("发送后续消息…")
 
     def set_status(self, text: str) -> None:
         self.status.setText(text)
@@ -1090,24 +1102,76 @@ class ChatPane(QWidget):
         ):
             self._body_parts = []
         self._live_steps = []
+        self._live_status = "处理中…"
+        self._live_draft = ""
+        self._live_draft_step = None
+        self._live_skills = []
+        self._live_cancelled = False
         self._body_parts.append(("user", user_text))
         self._body_parts.append(
             ("live", "<div class='live'><div class='role'>助手 · 进行中</div></div>")
         )
-        self._paint()
+        self._refresh_live_panel()
 
     def update_live_status(self, message: str) -> None:
-        inner = f"<div class='meta'>{_escape(message)}</div>{self._format_live_steps()}"
-        self._set_live_inner(inner)
+        self._live_status = message or self._live_status
+        self._refresh_live_panel()
 
     def update_live_steps(self, steps: list[dict[str, Any]]) -> None:
         self._live_steps = steps
-        body = "".join(self._step_html(s) for s in steps)
-        self._set_live_inner(body or "<div class='meta'>…</div>")
+        self._live_draft = ""
+        self._live_draft_step = None
+        self._refresh_live_panel()
         all_ch: list[dict[str, Any]] = []
         for step in steps:
             all_ch.extend(c for c in (step.get("changes") or []) if isinstance(c, dict))
         self._set_live_changes(all_ch)
+
+    def append_assistant_delta(self, delta: str, *, step: int | None = None) -> None:
+        if not delta:
+            return
+        if (
+            step is not None
+            and self._live_draft_step is not None
+            and step != self._live_draft_step
+        ):
+            self._live_draft = ""
+        if step is not None:
+            self._live_draft_step = step
+        self._live_draft = (self._live_draft or "") + delta
+        self._refresh_live_panel()
+
+    def update_skill_event(self, event: dict[str, Any]) -> None:
+        name = str(event.get("skill") or "?")
+        st = str(event.get("status") or "start")
+        if st == "start":
+            self._live_skills.append({"skill": name, "status": "start"})
+            if not self._live_cancelled:
+                self._live_status = str(event.get("message") or f"执行 {name}…")
+        elif st == "end":
+            for item in reversed(self._live_skills):
+                if item.get("skill") == name and item.get("status") in {
+                    "start",
+                    "running",
+                }:
+                    item["status"] = "err" if event.get("ok") is False else "ok"
+                    break
+            else:
+                self._live_skills.append(
+                    {
+                        "skill": name,
+                        "status": "err" if event.get("ok") is False else "ok",
+                    }
+                )
+        if len(self._live_skills) > 12:
+            self._live_skills = self._live_skills[-12:]
+        self._refresh_live_panel()
+
+    def mark_cancelled(self, message: str = "") -> None:
+        self._live_cancelled = True
+        self._live_status = message or "已取消本轮任务"
+        self._live_draft = ""
+        self._refresh_live_panel()
 
     def finish_live(self, answer: str, *, ok: bool = True) -> None:
         self._body_parts = _drop_live_parts(self._body_parts)
@@ -1115,6 +1179,9 @@ class ChatPane(QWidget):
         if segs:
             self._body_parts.append(("assistant" if ok else "error", segs))
         self._live_steps = []
+        self._live_draft = ""
+        self._live_skills = []
+        self._live_cancelled = False
         self._paint()
 
     def set_pending_plan(self, plan: dict[str, Any] | None) -> None:
@@ -1154,6 +1221,14 @@ class ChatPane(QWidget):
 
     def _emit_send(self) -> None:
         text = self.input.toPlainText().strip()
+        if self._busy:
+            if text:
+                self.input.clear()
+                self.enqueue_requested.emit(text)
+                self.set_status(f"已排队补充: {text[:60]}")
+            else:
+                self.cancel_requested.emit()
+            return
         if not text:
             return
         self.input.clear()
@@ -1222,12 +1297,47 @@ class ChatPane(QWidget):
     def _format_live_steps(self) -> str:
         return "".join(self._step_html(s) for s in self._live_steps)
 
-    def _set_live_inner(self, inner: str) -> None:
-        live = (
-            "<div class='live'>"
-            "<div class='role'>助手 · 进行中</div>"
-            f"{inner}</div>"
-        )
+    def _format_live_skills(self) -> str:
+        if not self._live_skills:
+            return ""
+        chips: list[str] = []
+        for s in self._live_skills:
+            st = str(s.get("status") or "start")
+            mark = "✓" if st == "ok" else ("✗" if st == "err" else "…")
+            chips.append(
+                f"<span class='chip'>{mark} {_escape(str(s.get('skill') or '?'))}</span>"
+            )
+        return "<div class='meta'>" + "".join(chips) + "</div>"
+
+    def _refresh_live_panel(self) -> None:
+        role = "助手 · 已取消" if self._live_cancelled else "助手 · 进行中"
+        parts = [
+            f"<div class='live'><div class='role'>{role}</div>",
+            f"<div class='meta'>{_escape(self._live_status or '处理中…')}</div>",
+            self._format_live_skills(),
+        ]
+        if self._live_draft and not self._live_cancelled:
+            draft = self._live_draft
+            if len(draft) > 4000:
+                draft = "…" + draft[-3999:]
+            parts.append(
+                "<div class='meta'><b>流式输出</b></div>"
+                f"<div class='thought' style='white-space:pre-wrap'>{_escape(draft)}</div>"
+            )
+        steps_html = self._format_live_steps()
+        parts.append(steps_html or "")
+        parts.append("</div>")
+        self._set_live_inner("".join(parts), role_included=True)
+
+    def _set_live_inner(self, inner: str, *, role_included: bool = False) -> None:
+        if role_included:
+            live = inner
+        else:
+            live = (
+                "<div class='live'>"
+                "<div class='role'>助手 · 进行中</div>"
+                f"{inner}</div>"
+            )
         replaced = False
         for i, (kind, _) in enumerate(self._body_parts):
             if kind == "live":

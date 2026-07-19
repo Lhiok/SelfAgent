@@ -359,7 +359,7 @@ class WorkspaceStore:
         return self._run_turn(session_id, lambda conv: conv.confirm_plan())
 
     def iter_chat_events(self, session_id: str, message: str) -> Iterator[dict[str, Any]]:
-        """同步生成器：status/step 进度事件 + 最终 done/error。"""
+        """同步生成器：status/step/assistant_delta/skill/cancelled + 最终 done/error。"""
         yield from self._iter_run_events(
             session_id,
             started_message="开始处理…",
@@ -372,6 +372,18 @@ class WorkspaceStore:
             started_message="开始执行计划…",
             runner=lambda conv: conv.confirm_plan(),
         )
+
+    def cancel_run(self, session_id: str) -> dict[str, Any]:
+        """请求取消当前正在执行的 turn。"""
+        conv = self._get_or_load(session_id)
+        conv.cancel()
+        return {"ok": True, "session_id": session_id, "cancelled": True}
+
+    def enqueue_message(self, session_id: str, text: str) -> dict[str, Any]:
+        """向当前 turn 队列中途补充用户消息。"""
+        conv = self._get_or_load(session_id)
+        conv.enqueue(text)
+        return {"ok": True, "session_id": session_id, "enqueued": True}
 
     def _run_turn(self, session_id: str, runner) -> dict[str, Any]:
         conv = self._get_or_load(session_id)

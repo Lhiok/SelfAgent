@@ -46,6 +46,7 @@ class MainWindow(QMainWindow):
         self._run: RunThread | None = None
         self._live_steps: list[dict[str, Any]] = []
         self._pending_ask: dict[str, Any] | None = None
+        self._cancel_requested = False
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -86,6 +87,8 @@ class MainWindow(QMainWindow):
         self.sidebar.session_delete_requested.connect(self._delete_session_by_id)
 
         self.chat.send_requested.connect(self._send)
+        self.chat.cancel_requested.connect(self._cancel_run)
+        self.chat.enqueue_requested.connect(self._enqueue_during_run)
         self.chat.confirm_plan_requested.connect(self._confirm_plan)
         self.chat.open_ask_requested.connect(self._open_ask)
         self.chat.change_clicked.connect(self._show_change)
@@ -239,6 +242,7 @@ class MainWindow(QMainWindow):
     def _start_run(self, kind: str, *, message: str, user_echo: str) -> None:
         assert self._session_id
         self._live_steps = []
+        self._cancel_requested = False
         self._set_busy(True)
         self.chat.set_status("处理中…")
         self.chat.begin_live(user_echo)
@@ -247,6 +251,28 @@ class MainWindow(QMainWindow):
         self._run.event_received.connect(self._on_event)
         self._run.run_finished.connect(self._on_run_finished)
         self._run.start()
+
+    @Slot()
+    def _cancel_run(self) -> None:
+        if not self._session_id or not self._busy:
+            return
+        self._cancel_requested = True
+        try:
+            self.store.cancel_run(self._session_id)
+        except Exception as exc:  # noqa: BLE001
+            show_warning(self, "取消失败", str(exc))
+            return
+        self.chat.set_status("正在停止…")
+        self.chat.update_live_status("已请求取消，等待当前步结束…")
+
+    @Slot(str)
+    def _enqueue_during_run(self, text: str) -> None:
+        if not self._session_id or not self._busy:
+            return
+        try:
+            self.store.enqueue_message(self._session_id, text)
+        except Exception as exc:  # noqa: BLE001
+            show_warning(self, "补充失败", str(exc))
 
     @Slot(object)
     def _on_event(self, event: object) -> None:
@@ -257,6 +283,21 @@ class MainWindow(QMainWindow):
             msg = str(event.get("message") or event.get("phase") or "")
             self.chat.set_status(msg or "处理中…")
             self.chat.update_live_status(msg)
+        elif etype == "assistant_delta":
+            delta = str(event.get("delta") or "")
+            step = event.get("step")
+            step_i = int(step) if isinstance(step, int) else None
+            self.chat.append_assistant_delta(delta, step=step_i)
+        elif etype == "skill":
+            self.chat.update_skill_event(event)
+            msg = str(event.get("message") or "")
+            if msg:
+                self.chat.set_status(msg)
+        elif etype == "cancelled":
+            msg = str(event.get("message") or "已取消本轮任务")
+            self.chat.mark_cancelled(msg)
+            self.chat.set_status(msg)
+            self._cancel_requested = True
         elif etype == "step":
             # replace or append by index
             idx = event.get("index")
@@ -289,6 +330,10 @@ class MainWindow(QMainWindow):
             if detail_text:
                 self.inspector.show_text("过程细节", str(detail_text))
             self._refresh_sidebar()
+            if self._cancel_requested or str(session.get("answer") or "").startswith(
+                "已取消"
+            ):
+                self.chat.set_status("已取消")
         elif etype == "error":
             self.chat.finish_live(str(event.get("message") or "未知错误"), ok=False)
             self.chat.set_status("出错")
@@ -296,9 +341,11 @@ class MainWindow(QMainWindow):
     @Slot()
     def _on_run_finished(self) -> None:
         self._set_busy(False)
-        if self.chat.status.text() not in {"出错"}:
+        cur = self.chat.status.text()
+        if cur not in {"出错", "已取消"}:
             self.chat.set_status("就绪")
         self._run = None
+        self._cancel_requested = False
 
     def _open_ask(self) -> None:
         if not self._session_id:
