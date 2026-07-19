@@ -1,6 +1,10 @@
 """流式采样与降级。"""
 
-from ai.base import AIClient, AIMessage, AIResponse, ChatOptions, StreamEvent
+from ai.base import AIClient, AIMessage, AIResponse, StreamEvent
+from permission import PermissionGuard
+from session import Agent
+from scripted_ai import ScriptedAI, finish, resp
+from skills import SkillRegistry
 
 
 class _BoomStream(AIClient):
@@ -12,17 +16,6 @@ class _BoomStream(AIClient):
     def chat_stream(self, messages, options=None):
         raise RuntimeError("sse broken")
         yield  # pragma: no cover
-
-
-class _OkStream(AIClient):
-    provider = "ok"
-
-    def chat(self, messages, options=None):
-        return AIResponse(content="should not use", model="m", provider="ok")
-
-    def chat_stream(self, messages, options=None):
-        yield StreamEvent(text="Thought: t\n", done=False)
-        yield StreamEvent(text="Final Answer: streamed\n", done=False)
 
 
 def test_default_chat_stream_yields_full():
@@ -39,11 +32,7 @@ def test_default_chat_stream_yields_full():
 
 
 def test_agent_stream_fallback(monkeypatch):
-    from permission import PermissionGuard
-    from react import ReActAgent
-    from skills import SkillRegistry
-
-    agent = ReActAgent(
+    agent = Agent(
         ai=_BoomStream(),
         skills=SkillRegistry(permission=PermissionGuard.allow_all()),
         permission=PermissionGuard.allow_all(),
@@ -55,24 +44,17 @@ def test_agent_stream_fallback(monkeypatch):
     assert "ok" in result.answer
 
 
-def test_agent_uses_stream_deltas():
-    from permission import PermissionGuard
-    from react import ReActAgent
-    from skills import SkillRegistry
-
-    deltas: list[str] = []
-
-    agent = ReActAgent(
-        ai=_OkStream(),
+def test_agent_uses_chat_with_tools_not_stream():
+    """有 tools 时 loop 走 chat()；finish 通过 tool_calls 结束。"""
+    ai = ScriptedAI([resp(finish("streamed"))])
+    agent = Agent(
+        ai=ai,
         skills=SkillRegistry(permission=PermissionGuard.allow_all()),
         permission=PermissionGuard.allow_all(),
         stream_ai=True,
         max_steps=3,
-        on_progress=lambda e: deltas.append(e.get("delta", ""))
-        if e.get("type") == "assistant_delta"
-        else None,
     )
     result = agent.run("hi")
     assert result.completed
     assert "streamed" in result.answer
-    assert any(deltas)
+    assert ai.n == 1

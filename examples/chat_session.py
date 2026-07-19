@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT / "src"))
 import config as cfg
 from log import get_run_log_path, reset_logger
 from permission import PermissionGuard
-from react import AgentMode, Conversation, ReActAgent
+from session import AgentMode, Conversation, Agent
 from skills import SkillRegistry
 
 
@@ -45,9 +45,26 @@ def main() -> None:
         _print_sessions(Conversation.list_sessions())
         return
 
-    agent = ReActAgent(
-        skills=SkillRegistry.from_config(workdir=args.workdir),
-        permission=PermissionGuard.from_config(),
+    guard = PermissionGuard.from_config()
+
+    def _cli_permission_ask(payload: dict) -> bool:  # type: ignore[type-arg]
+        skill = payload.get("skill") or "?"
+        reason = payload.get("reason") or ""
+        print(f"\n======== 需要授权 ========\n{reason}\nSkill: {skill}", flush=True)
+        args = payload.get("arguments") or {}
+        if args:
+            print(f"参数: {args}", flush=True)
+        print("允许执行？[y/N]", flush=True)
+        try:
+            raw = input("> ").strip().lower()
+        except EOFError:
+            raw = ""
+        return raw in {"y", "yes", "是", "允许", "a", "allow"}
+
+    guard.ask_handler = _cli_permission_ask
+    agent = Agent(
+        skills=SkillRegistry.from_config(permission=guard, load_permission=False, workdir=args.workdir),
+        permission=guard,
         mode=AgentMode.AGENT,
         workdir=args.workdir,
     )
@@ -70,7 +87,9 @@ def main() -> None:
             print(conv.pending_plan.format_text())
 
     print(
-        "连续对话已启动。命令: /plan /agent /confirm /detail /workdir "
+        "连续对话已启动。命令: /plan /agent /confirm /reject <反馈> /detail /workdir "
+        "/memory /remember <text> "
+        "/workflows /run <name> /loop <sec> <prompt> "
         "/sessions /load /save /reset /quit"
     )
     print(f"当前细节级别: {agent.detail}（可用 /detail off|summary|full）")
@@ -102,7 +121,10 @@ def main() -> None:
             continue
         if text == "/plan":
             conv.set_mode(AgentMode.PLAN)
-            print("已切换 Plan Mode")
+            print(
+                f"已切换 Plan Mode（phase={conv.plan_lc.phase.value}，"
+                f"pre_mode={conv.plan_lc.session.pre_mode}）"
+            )
             continue
         if text == "/agent":
             conv.set_mode(AgentMode.AGENT)
@@ -172,6 +194,107 @@ def main() -> None:
                 print(f"助手> 执行计划失败: {exc}")
                 continue
             _print_result(result, streamed=conv.agent.stream_detail)
+            print(f"plan phase → {conv.plan_lc.phase.value}")
+            continue
+        if text == "/reject" or text.startswith("/reject "):
+            fb = text[len("/reject") :].strip()
+            out = conv.reject_plan(fb)
+            if out.get("ok"):
+                print(f"已拒绝计划，phase={out.get('phase')}，请修订后再次 submit_plan")
+            else:
+                print(f"拒绝失败: {out.get('error')}")
+            continue
+        if text == "/memory":
+            summary = conv.memory.list_summary()
+            print(f"memory dir: {summary.get('dir')}")
+            print("--- MEMORY.md ---")
+            print((summary.get("index") or "（空）")[:2000])
+            topics = summary.get("topics") or []
+            if topics:
+                print("--- topics ---")
+                for t in topics:
+                    print(
+                        f"  - {t.get('name')} [{t.get('type')}] "
+                        f"{t.get('description')}"
+                    )
+            else:
+                print("（无 topic）")
+            continue
+        if text.startswith("/remember "):
+            note = text.split(maxsplit=1)[1].strip()
+            if not note:
+                print("用法: /remember <文本>")
+                continue
+            try:
+                import uuid as _uuid
+
+                from memory.types import MemoryType
+
+                name = f"note-{_uuid.uuid4().hex[:8]}"
+                ent = conv.memory.remember(
+                    name, note, description=note[:80], mem_type=MemoryType.USER
+                )
+                print(f"已写入记忆: {ent.meta.name}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"写入失败: {exc}")
+            continue
+        if text == "/workflows":
+            from workflow import WorkflowEngine
+
+            engine = WorkflowEngine(
+                conv.agent.bridge,
+                conv.agent.permission,
+                control=conv.agent.control,
+            )
+            cmds = [c for c in engine.registry.list() if c.kind == "workflow"]
+            if not cmds:
+                print("（未找到 YAML 工作流，请放到 .selfagent/workflows/）")
+            else:
+                for c in cmds:
+                    print(f"  /{c.name}  {c.description}")
+            continue
+        if text.startswith("/run "):
+            name = text.split(maxsplit=1)[1].strip()
+            try:
+                from workflow import WorkflowEngine
+
+                engine = WorkflowEngine(
+                    conv.agent.bridge,
+                    conv.agent.permission,
+                    control=conv.agent.control,
+                    on_progress=conv.agent.on_progress,
+                    agent_factory=lambda: conv.agent,
+                )
+                run = engine.run_def(name)
+                conv.workflow_run_id = run.id
+                if conv.persist_dir is not None:
+                    conv.save()
+                print(f"工作流 {name} → {run.status.value} (id={run.id})")
+                for step in run.steps:
+                    mark = "ok" if step.ok else "fail"
+                    print(f"  [{mark}] {step.id}: {(step.output or '')[:200]}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"运行失败: {exc}")
+            continue
+        if text.startswith("/loop "):
+            parts = text.split(maxsplit=2)
+            if len(parts) < 3:
+                print("用法: /loop <秒> <提示词>")
+                continue
+            try:
+                every = float(parts[1])
+            except ValueError:
+                print("用法: /loop <秒> <提示词>")
+                continue
+            prompt = parts[2].strip()
+            from workflow.cron import CronScheduler
+
+            sched = CronScheduler()
+            task = sched.add(prompt, every_sec=every)
+            print(
+                f"已写入定时任务 {task.id}，每 {task.every_sec}s；"
+                "需在配置中 workflow.cron_enabled=true 并启动引擎才会触发"
+            )
             continue
 
         try:

@@ -65,6 +65,7 @@ def run_command(
             timeout=timeout,
             shell=False,
             env=env if env is not None else {**os.environ},
+            stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired:
         return SkillResult(ok=False, output=f"{label} 超时（{timeout}s）")

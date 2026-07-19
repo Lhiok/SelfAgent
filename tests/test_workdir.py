@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from ai.base import AIClient, AIResponse, ChatOptions
 from permission import PermissionGuard
-from react import ReActAgent
+from session import Agent
 from skills import LocalFileSkill, SearchCodeSkill, SkillRegistry
 
 
@@ -25,40 +24,22 @@ def test_registry_set_workdir(tmp_path):
 
 
 def test_agent_workdir_in_prompt_and_skills(tmp_path):
+    from scripted_ai import ScriptedAI, finish, resp, tc
+
     work = tmp_path / "workspace"
     work.mkdir()
     (work / "readme.md").write_text("# demo", encoding="utf-8")
 
-    class _AI(AIClient):
-        provider = "scripted"
-
-        def __init__(self) -> None:
-            self.n = 0
-            self.last_system = ""
-
-        def chat(self, messages, options: ChatOptions | None = None) -> AIResponse:
-            self.last_system = messages[0].content
-            self.n += 1
-            if self.n == 1:
-                return AIResponse(
-                    content=(
-                        "Thought: 列目录\n"
-                        "Action: local_file\n"
-                        'Action Input: {"action":"list","path":"."}\n'
-                    ),
-                    model="s",
-                    provider=self.provider,
-                )
-            return AIResponse(
-                content="Thought: ok\nFinal Answer: 看到 readme.md\n",
-                model="s",
-                provider=self.provider,
-            )
+    ai = ScriptedAI(
+        [
+            resp(tc("local_file", {"action": "list", "path": "."}, id="list1")),
+            resp(finish("看到 readme.md")),
+        ]
+    )
 
     reg = SkillRegistry(permission=PermissionGuard.allow_all())
     reg.register(LocalFileSkill(root=tmp_path, allow_write=False))
-    ai = _AI()
-    agent = ReActAgent(
+    agent = Agent(
         ai=ai,
         skills=reg,
         permission=PermissionGuard.allow_all(),
@@ -73,30 +54,22 @@ def test_agent_workdir_in_prompt_and_skills(tmp_path):
     result = agent.run("列出文件")
     assert result.completed
     assert "readme.md" in (result.steps[0].observation or "")
-    assert str(work.resolve()) in ai.last_system
+    assert str(work.resolve()) in ai.calls[0][0].content
 
 
 def test_set_workdir_runtime(tmp_path):
+    from scripted_ai import ScriptedAI, finish, resp
+
     a = tmp_path / "a"
     b = tmp_path / "b"
     a.mkdir()
     b.mkdir()
     (b / "only-b.txt").write_text("x", encoding="utf-8")
 
-    class _AI(AIClient):
-        provider = "scripted"
-
-        def chat(self, messages, options: ChatOptions | None = None) -> AIResponse:
-            return AIResponse(
-                content="Thought: x\nFinal Answer: ok\n",
-                model="s",
-                provider=self.provider,
-            )
-
     reg = SkillRegistry(permission=PermissionGuard.allow_all())
     reg.register(LocalFileSkill(root=a, allow_write=False))
-    agent = ReActAgent(
-        ai=_AI(),
+    agent = Agent(
+        ai=ScriptedAI([resp(finish("ok"))]),
         skills=reg,
         permission=PermissionGuard.allow_all(),
         workdir=a,

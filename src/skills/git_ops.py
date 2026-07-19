@@ -188,6 +188,7 @@ class GitOpsSkill(Skill):
                 timeout=self.timeout,
                 shell=False,
                 check=False,
+                stdin=subprocess.DEVNULL,
             )
         except FileNotFoundError:
             return SkillResult(ok=False, output="未找到 git 可执行文件，请确认已安装并在 PATH 中")

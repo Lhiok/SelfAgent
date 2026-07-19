@@ -49,6 +49,13 @@ def main() -> None:
     reset_logger()
 
     try:
+        from hooks import HookRegistry, set_hook_registry
+
+        set_hook_registry(HookRegistry.from_config())
+    except Exception:  # noqa: BLE001
+        pass
+
+    try:
         import uvicorn
     except ImportError as exc:
         raise SystemExit(

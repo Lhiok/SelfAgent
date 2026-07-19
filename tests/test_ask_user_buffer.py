@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import json
 
-from ai.base import AIClient, AIResponse, ChatOptions
 from permission import PermissionGuard
-from react import AgentMode, ReActAgent
+from session import AgentMode, Agent
+from scripted_ai import ScriptedAI, resp, submit_plan, tc
 from skills import AskUserSkill, LocalFileSkill, SkillRegistry
 from skills.ask_user import collect_ask_answers_from_steps
 
 
 def test_sequential_ask_user_flushed_once_before_final():
-    """连续多次 ask_user 先暂存，输出 Final Answer 时一次性询问。"""
+    """连续多次 ask_user 先暂存，submit_plan 前一次性询问。"""
     asks: list[dict] = []
 
     def handler(question, options, meta):
@@ -21,50 +21,41 @@ def test_sequential_ask_user_flushed_once_before_final():
             ensure_ascii=False,
         )
 
-    class _AI(AIClient):
-        provider = "scripted"
-
-        def __init__(self) -> None:
-            self.n = 0
-
-        def chat(self, messages, options: ChatOptions | None = None) -> AIResponse:
-            self.n += 1
-            if self.n == 1:
-                return AIResponse(
-                    content=(
-                        "Thought: 问第一题\n"
-                        "Action: ask_user\n"
-                        'Action Input: {"question":"缓存？","options":["内存","Redis"]}\n'
-                    ),
-                    model="s",
-                    provider=self.provider,
-                )
-            if self.n == 2:
-                return AIResponse(
-                    content=(
-                        "Thought: 问第二题\n"
-                        "Action: ask_user\n"
-                        'Action Input: {"question":"日志？","options":["info","debug"]}\n'
-                    ),
-                    model="s",
-                    provider=self.provider,
-                )
-            return AIResponse(
-                content=(
-                    "Thought: 出计划\n"
-                    "Plan:\n"
-                    '1. skill=local_file | input={"action":"read","path":"a.txt"} | why=查看\n'
-                    "Final Answer: 两问均选第一项，计划如下\n"
-                ),
-                model="s",
-                provider=self.provider,
-            )
-
     reg = SkillRegistry(permission=PermissionGuard.allow_all())
     reg.register(LocalFileSkill(root=".", allow_write=False))
     reg.register(AskUserSkill(ask_handler=handler))
-    agent = ReActAgent(
-        ai=_AI(),
+    agent = Agent(
+        ai=ScriptedAI(
+            [
+                resp(
+                    tc(
+                        "ask_user",
+                        {"question": "缓存？", "options": ["内存", "Redis"]},
+                        id="q1",
+                    )
+                ),
+                resp(
+                    tc(
+                        "ask_user",
+                        {"question": "日志？", "options": ["info", "debug"]},
+                        id="q2",
+                    )
+                ),
+                resp(
+                    submit_plan(
+                        "两问均选第一项，计划如下",
+                        [
+                            {
+                                "skill": "local_file",
+                                "input": {"action": "read", "path": "a.txt"},
+                                "why": "查看",
+                            }
+                        ],
+                        thought="出计划",
+                    )
+                ),
+            ]
+        ),
         skills=reg,
         permission=PermissionGuard.allow_all(),
         mode=AgentMode.PLAN,
@@ -81,7 +72,7 @@ def test_sequential_ask_user_flushed_once_before_final():
 
 
 def test_buffered_ask_flushed_when_model_omits_final_answer_prefix():
-    """暂存后模型用纯文本收尾（无 Final Answer:）时，仍应弹出 ask_user。"""
+    """暂存后模型用纯文本收尾（无 finish/submit_plan）时，仍应弹出 ask_user。"""
     asks: list[dict] = []
 
     def handler(question, options, meta):
@@ -92,54 +83,45 @@ def test_buffered_ask_flushed_when_model_omits_final_answer_prefix():
             ensure_ascii=False,
         )
 
-    class _AI(AIClient):
-        provider = "scripted"
-
-        def __init__(self) -> None:
-            self.n = 0
-
-        def chat(self, messages, options: ChatOptions | None = None) -> AIResponse:
-            self.n += 1
-            if self.n == 1:
-                return AIResponse(
-                    content=(
-                        "Thought: 一次问完\n"
-                        "Action: ask_user\n"
-                        "Action Input: "
-                        '{"questions":['
-                        '{"question":"P0-1？","options":["A","B"]},'
-                        '{"question":"P0-2？","options":["A","B"]}'
-                        "]}\n"
-                    ),
-                    model="s",
-                    provider=self.provider,
-                )
-            if self.n == 2:
-                # 复现线上：无 Final Answer: 前缀的纯文本
-                return AIResponse(
-                    content=(
-                        "两个问题已提交，请在上方选择你偏好的修复方案。"
-                        "选择后我会立即生成详细修复计划。\n"
-                    ),
-                    model="s",
-                    provider=self.provider,
-                )
-            return AIResponse(
-                content=(
-                    "Thought: 根据选择出计划\n"
-                    "Plan:\n"
-                    '1. skill=local_file | input={"action":"read","path":"a.txt"} | why=查看\n'
-                    "Final Answer: 计划已就绪\n"
-                ),
-                model="s",
-                provider=self.provider,
-            )
-
     reg = SkillRegistry(permission=PermissionGuard.allow_all())
     reg.register(LocalFileSkill(root=".", allow_write=False))
     reg.register(AskUserSkill(ask_handler=handler))
-    agent = ReActAgent(
-        ai=_AI(),
+    agent = Agent(
+        ai=ScriptedAI(
+            [
+                resp(
+                    tc(
+                        "ask_user",
+                        {
+                            "questions": [
+                                {"question": "P0-1？", "options": ["A", "B"]},
+                                {"question": "P0-2？", "options": ["A", "B"]},
+                            ]
+                        },
+                        id="batch",
+                    )
+                ),
+                resp(
+                    content=(
+                        "两个问题已提交，请在上方选择你偏好的修复方案。"
+                        "选择后我会立即生成详细修复计划。"
+                    )
+                ),
+                resp(
+                    submit_plan(
+                        "计划已就绪",
+                        [
+                            {
+                                "skill": "local_file",
+                                "input": {"action": "read", "path": "a.txt"},
+                                "why": "查看",
+                            }
+                        ],
+                        thought="根据选择出计划",
+                    )
+                ),
+            ]
+        ),
         skills=reg,
         permission=PermissionGuard.allow_all(),
         mode=AgentMode.PLAN,
@@ -153,9 +135,9 @@ def test_buffered_ask_flushed_when_model_omits_final_answer_prefix():
 
 
 def test_collect_ask_answers_from_steps():
-    from react.agent import ActionCall, ReActStep
+    from agent.facade import ActionCall, AgentStep
 
-    step = ReActStep(
+    step = AgentStep(
         index=1,
         thought="确认",
         calls=[

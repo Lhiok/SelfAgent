@@ -51,6 +51,20 @@ class AskAnswerBody(BaseModel):
     answers: list[dict[str, Any]] | None = None
 
 
+class PermissionAnswerBody(BaseModel):
+    ask_id: str = Field(min_length=1)
+    allow: bool = True
+
+
+class WorkflowRunBody(BaseModel):
+    name: str = Field(min_length=1)
+    session_id: str | None = None
+
+
+class PlanRejectBody(BaseModel):
+    feedback: str = ""
+
+
 def create_app(store: WorkspaceStore | None = None) -> FastAPI:
     app = FastAPI(title="SelfAgent Workbench", version="0.1.0")
     app.state.store = store or WorkspaceStore()
@@ -61,6 +75,59 @@ def create_app(store: WorkspaceStore | None = None) -> FastAPI:
     @app.get("/api/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/api/mcp")
+    def list_mcp() -> dict[str, Any]:
+        """列出已配置/已连接的 MCP 工具。"""
+        try:
+            from mcp import McpManager, load_mcp_servers
+
+            servers = [
+                {
+                    "name": s.name,
+                    "transport": s.transport,
+                    "enabled": s.enabled,
+                    "command": s.command,
+                }
+                for s in load_mcp_servers()
+            ]
+            mgr = getattr(app.state, "mcp_manager", None)
+            tools = []
+            if mgr is not None:
+                tools = [
+                    {
+                        "name": t.tool_name,
+                        "server": t.server,
+                        "description": t.description,
+                    }
+                    for t in mgr.list_tools()
+                ]
+            return {"servers": servers, "tools": tools}
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.post("/api/mcp/reload")
+    def reload_mcp() -> dict[str, Any]:
+        try:
+            from mcp import McpManager
+
+            old = getattr(app.state, "mcp_manager", None)
+            if old is not None:
+                try:
+                    old.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            mgr = McpManager.from_config()
+            app.state.mcp_manager = mgr
+            return {
+                "ok": True,
+                "tools": [
+                    {"name": t.tool_name, "server": t.server}
+                    for t in mgr.list_tools()
+                ],
+            }
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.get("/api/workspaces")
     def list_workspaces() -> list[dict[str, Any]]:
@@ -138,6 +205,15 @@ def create_app(store: WorkspaceStore | None = None) -> FastAPI:
         except RuntimeError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @app.get("/api/sessions/{session_id}/memory")
+    def get_memory(session_id: str) -> dict[str, Any]:
+        try:
+            return store_of().get_session_memory(session_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.patch("/api/sessions/{session_id}")
     def patch_session(session_id: str, body: SessionPatch) -> dict[str, Any]:
         try:
@@ -190,6 +266,21 @@ def create_app(store: WorkspaceStore | None = None) -> FastAPI:
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    @app.post("/api/sessions/{session_id}/permission")
+    def answer_permission(session_id: str, body: PermissionAnswerBody) -> dict[str, Any]:
+        try:
+            return store_of().answer_permission(
+                session_id,
+                ask_id=body.ask_id,
+                allow=body.allow,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     @app.post("/api/sessions/{session_id}/chat")
     async def chat(session_id: str, body: ChatBody) -> dict[str, Any]:
         try:
@@ -233,6 +324,42 @@ def create_app(store: WorkspaceStore | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.post("/api/sessions/{session_id}/reject")
+    async def reject_plan(session_id: str, body: PlanRejectBody | None = None) -> dict[str, Any]:
+        fb = (body.feedback if body is not None else "") or ""
+        try:
+            return await asyncio.to_thread(store_of().reject_plan, session_id, fb)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.post("/api/workflow/run")
+    async def workflow_run(body: WorkflowRunBody) -> dict[str, Any]:
+        try:
+            return await asyncio.to_thread(
+                store_of().run_workflow,
+                body.name,
+                session_id=body.session_id,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.get("/api/workflow/{run_id}")
+    def workflow_get(run_id: str) -> dict[str, Any]:
+        try:
+            return store_of().get_workflow_run(run_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/tasks")
+    def tasks_list(list_id: str = "default") -> dict[str, Any]:
+        return store_of().list_workflow_tasks(list_id)
 
     @app.post("/api/sessions/{session_id}/confirm/stream")
     async def confirm_stream(session_id: str) -> StreamingResponse:

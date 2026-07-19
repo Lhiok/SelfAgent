@@ -12,7 +12,7 @@ import config as cfg
 from log import get_logger
 from feishu import FeishuBot
 from ai import create_ai_client
-from react import ReActAgent
+from session import Agent
 from skills import SkillRegistry
 
 
@@ -36,18 +36,18 @@ def main() -> None:
     else:
         log.warning("未配置 feishu.webhook_url，跳过飞书推送")
 
-    # AI + ReAct + Skill
+    # AI + Agent + Skill
     if not api_key:
-        log.warning("未配置 ai.deepseek.api_key，跳过 AI/ReAct 示例")
+        log.warning("未配置 ai.deepseek.api_key，跳过 AI/Agent 示例")
         return
 
-    agent = ReActAgent(
+    agent = Agent(
         ai=create_ai_client("deepseek"),
         skills=SkillRegistry.from_config(),
         max_steps=8,
     )
     result = agent.run("列出当前项目根目录下的文件，并简要说明这是什么项目。")
-    log.notice(f"ReAct completed={result.completed} detail={result.detail_level}")
+    log.notice(f"Agent completed={result.completed} detail={result.detail_level}")
     # 未开 stream_detail 时，结束后仍可打印 result.detail_text / result.format_detail()
     if result.detail_text and not agent.stream_detail:
         print("\n" + result.detail_text)

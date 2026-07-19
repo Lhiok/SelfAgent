@@ -1,11 +1,6 @@
 # SelfAgent TypeScript 桌面
 
-Qt（PySide6）控件层已移除。桌面入口为 **Electron + Python FastAPI**，UI 默认加载 `src/web/static` SPA；另提供 React 工作台源码于 `packages/desktop/src`（`npm run dev -w @selfagent/desktop` 可单独开发）。
-
-## 参考（仅架构学习，未拷贝源码）
-
-- `C:\Users\Lhiok\Desktop\Github\JackProAi-claudecode3.1` — 启动器 / env / 本地部署体验
-- `C:\Users\Lhiok\Desktop\Github\claude-code-rev` — QueryEngine 式事件消费、工具流式展示思路
+桌面入口为 **Electron + Python FastAPI**。唯一 UI 为 `src/web/static` SPA（浏览器与 Electron 共用）；`packages/desktop` 仅提供 Electron 主进程壳。
 
 ## 启动
 
@@ -29,5 +24,15 @@ start.bat
 ## 包结构
 
 - `packages/client` — 类型化 REST/SSE 客户端
-- `packages/desktop` — Electron 主进程 + React UI 源码
-- `src/web` — FastAPI + 现网 SPA
+- `packages/desktop` — Electron 主进程（加载本地 FastAPI 提供的 web SPA）
+- `src/web` — FastAPI + 唯一工作台 SPA
+
+## 运行时流程
+
+```
+start.py → npm run start -w @selfagent/desktop
+  → electron dist-electron/main.js
+    → spawn python -m web
+    → BrowserWindow.loadURL(http://127.0.0.1:8787/)
+      → src/web/static/index.html
+```

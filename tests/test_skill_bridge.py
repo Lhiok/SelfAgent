@@ -1,7 +1,7 @@
 """SkillBridge 截断、JSON 围栏与进度。"""
 
 from permission import PermissionGuard
-from react.control import RunControl
+from session.control import RunControl
 from skills import SkillBridge, SkillRegistry
 from skills.base import Skill, SkillResult
 from skills.bridge import parse_arguments

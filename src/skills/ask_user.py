@@ -199,7 +199,7 @@ class AskUserSkill(Skill):
 
 
 def collect_ask_answers_from_steps(steps: list[Any]) -> list[dict[str, Any]]:
-    """从 ReAct 步骤里收集已确认的 ask_user 选择，供对话回顾。"""
+    """从步骤里收集已确认的 ask_user 选择，供对话回顾。"""
     out: list[dict[str, Any]] = []
     for step in steps or []:
         calls = getattr(step, "calls", None) or []

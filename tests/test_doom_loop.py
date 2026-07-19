@@ -1,11 +1,11 @@
 """doom-loop 检测。"""
 
-from react.doom_loop import DoomLoopTracker
-from react.types import ActionCall, ReActStep
+from session.doom_loop import DoomLoopTracker
+from session.types import ActionCall, AgentStep
 
 
-def _step(action: str, inp: str, *, ok: bool = True) -> ReActStep:
-    return ReActStep(
+def _step(action: str, inp: str, *, ok: bool = True) -> AgentStep:
+    return AgentStep(
         index=1,
         thought="t",
         calls=[

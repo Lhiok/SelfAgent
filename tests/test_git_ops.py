@@ -14,6 +14,7 @@ def _git(repo: Path, *args: str) -> None:
         check=True,
         capture_output=True,
         text=True,
+        stdin=subprocess.DEVNULL,
     )
 
 

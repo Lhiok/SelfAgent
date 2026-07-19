@@ -15,15 +15,18 @@ from typing import Any
 from ai import AIMessage
 from log import get_logger
 from permission import PermissionGuard
-from react import AgentMode, Conversation, ReActAgent
+from session import AgentMode, Conversation, Agent
 from skills import AskUserSkill, SkillRegistry
 
 logger = get_logger("web.store")
 
 DEFAULT_ROOT = Path("logs/workspaces")
 ASK_USER_TIMEOUT_SEC = 1800.0
+PERMISSION_ASK_TIMEOUT_SEC = 1800.0
 # 取消/关闭 ask 对话框时投入队列的哨兵，唤醒 _web_ask
 ASK_CANCEL_SENTINEL = "__SELFAGENT_ASK_CANCELLED__"
+PERM_ALLOW = "__ALLOW__"
+PERM_DENY = "__DENY__"
 
 
 def _now_iso() -> str:
@@ -69,6 +72,7 @@ class WorkspaceStore:
         self._locks: dict[str, threading.Lock] = {}
         # session_id -> {ask_id, queue, event}
         self._pending_asks: dict[str, dict[str, Any]] = {}
+        self._pending_perms: dict[str, dict[str, Any]] = {}
         self._global = threading.Lock()
         self._ensure_index()
 
@@ -228,6 +232,7 @@ class WorkspaceStore:
             conv.metadata["title"] = title.strip()
         path = conv.save()
         self._wire_ask_user(conv)
+        self._wire_permission_ask(conv)
         with self._global:
             self._convs[conv.session_id] = conv
             self._locks.setdefault(conv.session_id, threading.Lock())
@@ -360,6 +365,73 @@ class WorkspaceStore:
 
     def confirm_plan(self, session_id: str) -> dict[str, Any]:
         return self._run_turn(session_id, lambda conv: conv.confirm_plan())
+
+    def reject_plan(self, session_id: str, feedback: str = "") -> dict[str, Any]:
+        conv = self._get_or_load(session_id)
+        with self._lock_for(session_id):
+            out = conv.reject_plan(feedback)
+            path = conv.last_save_path or conv.save()
+            detail = self._session_detail(conv, path)
+            detail["reject"] = out
+            return detail
+
+    def get_session_memory(self, session_id: str) -> dict[str, Any]:
+        conv = self._get_or_load(session_id)
+        return conv.memory.list_summary()
+
+    def run_workflow(
+        self,
+        name: str,
+        *,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """按 YAML 名执行工作流；可选绑定会话的 bridge/permission。"""
+        from workflow import WorkflowEngine
+
+        if session_id:
+            sid = session_id.strip()
+            conv = self._get_or_load(sid)
+            with self._lock_for(sid):
+                engine = WorkflowEngine(
+                    conv.agent.bridge,
+                    conv.agent.permission,
+                    control=conv.agent.control,
+                    on_progress=conv.agent.on_progress,
+                    agent_factory=lambda: conv.agent.with_mode(AgentMode.AGENT),
+                )
+                run = engine.run_def(name)
+                conv.workflow_run_id = run.id
+                conv.save()
+                return run.to_dict()
+        agent = Agent()
+        engine = WorkflowEngine(
+            agent.bridge,
+            agent.permission,
+            control=agent.control,
+            agent_factory=lambda: agent,
+        )
+        return engine.run_def(name).to_dict()
+
+    def get_workflow_run(self, run_id: str) -> dict[str, Any]:
+        from workflow.run import load_run
+        import config as cfg
+
+        wf = cfg.get_section("workflow", {}) or {}
+        base = Path(wf.get("workflows_dir", ".selfagent/workflows"))
+        run = load_run(run_id, base)
+        if run is None:
+            raise FileNotFoundError(f"未找到工作流运行: {run_id}")
+        return run.to_dict()
+
+    def list_workflow_tasks(self, list_id: str = "default") -> dict[str, Any]:
+        from workflow.tasks import TaskStore
+        import config as cfg
+
+        wf = cfg.get_section("workflow", {}) or {}
+        root = Path(wf.get("tasks_dir", ".selfagent/tasks"))
+        store = TaskStore(root, list_id or "default")
+        items = [t.to_dict() for t in store.list_tasks()]
+        return {"list_id": store.list_id, "items": items}
 
     def iter_chat_events(self, session_id: str, message: str) -> Iterator[dict[str, Any]]:
         """同步生成器：status/step/assistant_delta/skill/cancelled + 最终 done/error。"""
@@ -531,10 +603,10 @@ class WorkspaceStore:
 
     # ---------- internals ----------
 
-    def _make_agent(self, workdir: str, *, detail: str | None = None) -> ReActAgent:
+    def _make_agent(self, workdir: str, *, detail: str | None = None) -> Agent:
         guard = PermissionGuard.from_config()
         skills = SkillRegistry.from_config(permission=guard, load_permission=False, workdir=workdir)
-        return ReActAgent(
+        return Agent(
             skills=skills,
             permission=guard,
             mode=AgentMode.AGENT,
@@ -567,6 +639,7 @@ class WorkspaceStore:
         if wid and not conv.metadata.get("workspace_id"):
             conv.metadata["workspace_id"] = wid
         self._wire_ask_user(conv)
+        self._wire_permission_ask(conv)
         with self._global:
             self._convs[conv.session_id] = conv
             self._locks.setdefault(conv.session_id, threading.Lock())
@@ -580,6 +653,15 @@ class WorkspaceStore:
             return self._web_ask(sid, question, options, meta)
 
         conv.agent.skills.register(AskUserSkill(ask_handler=handler))
+
+    def _wire_permission_ask(self, conv: Conversation) -> None:
+        """将 permission ask 接到工作台 SSE（对齐 CC canUseTool）。"""
+        sid = conv.session_id
+
+        def handler(payload: dict[str, Any]) -> bool:
+            return self._web_permission_ask(sid, payload)
+
+        conv.agent.permission.ask_handler = handler
 
     def _web_ask(
         self,
@@ -777,9 +859,111 @@ class WorkspaceStore:
             }
         else:
             summary["pending_plan"] = None
+        summary["plan"] = {
+            "phase": conv.plan_lc.phase.value,
+            "plan_id": conv.plan_lc.session.plan_id,
+            "hash": conv.plan_lc.session.plan_hash,
+            "pre_mode": conv.plan_lc.session.pre_mode,
+        }
         summary["pending_ask"] = self.get_pending_ask(conv.session_id)
+        summary["pending_permission"] = self.get_pending_permission(conv.session_id)
         summary["todos"] = self._load_todos(str(conv.agent.workdir))
         return summary
+
+    def get_pending_permission(self, session_id: str) -> dict[str, Any] | None:
+        with self._global:
+            pending = self._pending_perms.get(session_id.strip())
+            if not pending:
+                return None
+            event = pending.get("event")
+            return dict(event) if isinstance(event, dict) else None
+
+    def answer_permission(
+        self,
+        session_id: str,
+        *,
+        ask_id: str,
+        allow: bool,
+    ) -> dict[str, Any]:
+        sid = session_id.strip()
+        aid = (ask_id or "").strip()
+        if not aid:
+            raise ValueError("ask_id 不能为空")
+        with self._global:
+            pending = self._pending_perms.get(sid)
+            if not pending or pending.get("ask_id") != aid:
+                raise KeyError("没有匹配的待授权请求（可能已超时或已处理）")
+            answer_q = pending.get("queue")
+        if answer_q is None:
+            raise RuntimeError("待授权队列不可用")
+        try:
+            answer_q.put_nowait(PERM_ALLOW if allow else PERM_DENY)
+        except queue.Full as exc:
+            raise RuntimeError("该授权请求已处理") from exc
+        logger.notice(
+            f"已提交权限决定: {sid[:8]} ask={aid} allow={allow}"
+        )
+        return {"ok": True, "ask_id": aid, "allow": bool(allow)}
+
+    def _web_permission_ask(self, session_id: str, payload: dict[str, Any]) -> bool:
+        with self._global:
+            conv = self._convs.get(session_id)
+        if conv is None:
+            raise RuntimeError("会话未加载，无法请求权限确认")
+        progress = getattr(conv.agent, "on_progress", None)
+        if progress is None:
+            raise RuntimeError(
+                "permission ask 需要流式运行以便作答"
+            )
+
+        ask_id = uuid.uuid4().hex[:12]
+        event = {
+            "type": "permission_ask",
+            "ask_id": ask_id,
+            "skill": str(payload.get("skill") or ""),
+            "arguments": payload.get("arguments") or {},
+            "reason": str(payload.get("reason") or ""),
+            "matched_rule": str(payload.get("matched_rule") or ""),
+            "suggestions": list(payload.get("suggestions") or []),
+        }
+        answer_q: queue.Queue[str] = queue.Queue(maxsize=1)
+        with self._global:
+            old = self._pending_perms.get(session_id)
+            self._pending_perms[session_id] = {
+                "ask_id": ask_id,
+                "queue": answer_q,
+                "event": event,
+            }
+        if old is not None and old.get("queue") is not None:
+            try:
+                old["queue"].put_nowait(PERM_DENY)
+            except queue.Full:
+                pass
+
+        try:
+            progress(
+                {
+                    "type": "status",
+                    "phase": "permission_ask",
+                    "message": f"等待授权: {event['skill']}",
+                }
+            )
+            progress(event)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"推送 permission_ask 失败: {exc}")
+
+        try:
+            raw = str(answer_q.get(timeout=PERMISSION_ASK_TIMEOUT_SEC))
+            return raw == PERM_ALLOW
+        except queue.Empty as exc:
+            raise TimeoutError(
+                f"等待权限确认超时（{int(PERMISSION_ASK_TIMEOUT_SEC)}s）"
+            ) from exc
+        finally:
+            with self._global:
+                cur = self._pending_perms.get(session_id)
+                if cur and cur.get("ask_id") == ask_id:
+                    self._pending_perms.pop(session_id, None)
 
     def get_todos(self, session_id: str) -> dict[str, Any]:
         conv = self._get_or_load(session_id)

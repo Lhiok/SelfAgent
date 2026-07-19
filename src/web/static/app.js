@@ -153,7 +153,7 @@
       return;
     }
     // 计划待确认 = 需要用户授权
-    if (session?.pending_plan?.ok) {
+    if (session?.plan?.phase === "awaiting_confirm" || session?.pending_plan?.ok) {
       playNotify("attention");
       return;
     }
@@ -515,7 +515,10 @@
       return;
     }
 
-    const pendingPlan = s && s.pending_plan && s.pending_plan.ok ? s.pending_plan : null;
+    const awaitingPlan =
+      (s && s.plan && s.plan.phase === "awaiting_confirm") ||
+      (s && s.pending_plan && s.pending_plan.ok);
+    const pendingPlan = awaitingPlan && s.pending_plan && s.pending_plan.ok ? s.pending_plan : null;
     const lastTurnIndex = turns.length ? turns[turns.length - 1].index : -1;
 
     for (const t of turns) {
@@ -828,6 +831,94 @@
     };
     renderInspector();
     updateAskFallbackButton();
+  }
+
+  function applyPermissionAskEvent(event) {
+    if (!event?.ask_id) return;
+    if (!state.live) state.live = emptyLive({ status: "等待授权…" });
+    state.live.permission = {
+      ask_id: event.ask_id,
+      skill: event.skill || "",
+      arguments: event.arguments || {},
+      reason: event.reason || "",
+      matched_rule: event.matched_rule || "",
+      suggestions: event.suggestions || [],
+      submitting: false,
+    };
+    state.live.status = `等待授权: ${event.skill || "?"}`;
+    playNotify("attention");
+    state.inspector = {
+      type: "permission",
+      key: `perm-${event.ask_id}`,
+      permission: state.live.permission,
+    };
+    renderInspector();
+  }
+
+  function renderPermissionInspector(perm) {
+    changePanelKind.textContent = "授权";
+    changePanelKind.className = "change-panel-kind kind-ask";
+    setPanelPathNode(perm.skill || "权限确认");
+    const wrap = document.createElement("div");
+    wrap.className = "ask-panel";
+    const q = document.createElement("div");
+    q.className = "ask-question";
+    q.textContent = perm.reason || `允许执行 ${perm.skill}？`;
+    wrap.appendChild(q);
+    const meta = document.createElement("pre");
+    meta.className = "code-block";
+    meta.textContent = JSON.stringify(
+      {
+        skill: perm.skill,
+        arguments: perm.arguments,
+        matched_rule: perm.matched_rule,
+        suggestions: perm.suggestions,
+      },
+      null,
+      2
+    );
+    wrap.appendChild(meta);
+    const actions = document.createElement("div");
+    actions.className = "ask-actions";
+    const allowBtn = document.createElement("button");
+    allowBtn.className = "primary";
+    allowBtn.textContent = perm.submitting ? "提交中…" : "允许";
+    allowBtn.disabled = Boolean(perm.submitting);
+    allowBtn.onclick = () => submitPermissionAnswer(perm, true);
+    const denyBtn = document.createElement("button");
+    denyBtn.className = "ghost";
+    denyBtn.textContent = "拒绝";
+    denyBtn.disabled = Boolean(perm.submitting);
+    denyBtn.onclick = () => submitPermissionAnswer(perm, false);
+    actions.appendChild(allowBtn);
+    actions.appendChild(denyBtn);
+    wrap.appendChild(actions);
+    changePanelBody.appendChild(wrap);
+  }
+
+  async function submitPermissionAnswer(perm, allow) {
+    if (!state.sessionId || !perm?.ask_id || perm.submitting) return;
+    perm.submitting = true;
+    renderInspector();
+    try {
+      await api(`/api/sessions/${state.sessionId}/permission`, {
+        method: "POST",
+        body: JSON.stringify({ ask_id: perm.ask_id, allow: Boolean(allow) }),
+      });
+      if (state.live) {
+        state.live.permission = null;
+        state.live.status = allow ? "已授权，继续…" : "已拒绝授权";
+      }
+      if (state.inspector?.type === "permission") {
+        state.inspector = null;
+        renderInspector();
+      }
+      renderSession();
+    } catch (err) {
+      perm.submitting = false;
+      alert(err.message || String(err));
+      renderInspector();
+    }
   }
 
   function currentPendingAsk() {
@@ -1183,7 +1274,10 @@
     if (!state.sessionId) return;
     setBusy(true, "已提交，等待 Agent 继续…");
     const prevTurns = state.session?.turn_count || 0;
-    const prevPlan = JSON.stringify(state.session?.pending_plan || null);
+    const prevPlan = JSON.stringify({
+      phase: state.session?.plan?.phase || null,
+      pending: state.session?.pending_plan || null,
+    });
     for (let i = 0; i < 180; i++) {
       await new Promise((r) => setTimeout(r, 1000));
       if (state.streaming) return;
@@ -1195,7 +1289,11 @@
           renderSession();
           return;
         }
-        const planChanged = JSON.stringify(s.pending_plan || null) !== prevPlan;
+        const planChanged =
+          JSON.stringify({
+            phase: s.plan?.phase || null,
+            pending: s.pending_plan || null,
+          }) !== prevPlan;
         if ((s.turn_count || 0) > prevTurns || planChanged) {
           state.live = null;
           if (state.inspector?.type === "ask") {
@@ -1736,6 +1834,26 @@
       }
       insp.ask = ask;
       renderAskInspector(ask);
+      return;
+    }
+    if (insp.type === "permission") {
+      const perm =
+        state.live?.permission &&
+        state.live.permission.ask_id === insp.permission?.ask_id
+          ? state.live.permission
+          : insp.permission || state.session?.pending_permission;
+      if (!perm?.ask_id) {
+        changePanelKind.textContent = "授权";
+        changePanelKind.className = "change-panel-kind kind-ask";
+        setPanelPathNode("待授权");
+        const empty = document.createElement("div");
+        empty.className = "change-panel-empty";
+        empty.textContent = "没有待处理的权限请求。";
+        changePanelBody.appendChild(empty);
+        return;
+      }
+      insp.permission = perm;
+      renderPermissionInspector(perm);
       return;
     }
     if (insp.type === "detail") {
@@ -2359,6 +2477,11 @@
   function applyLiveEvent(event) {
     if (event.type === "ask_user") {
       applyAskUserEvent(event, { notify: true });
+      renderSession();
+      return;
+    }
+    if (event.type === "permission_ask") {
+      applyPermissionAskEvent(event);
       renderSession();
       return;
     }

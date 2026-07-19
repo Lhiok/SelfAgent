@@ -1,4 +1,4 @@
-﻿"""日志层：严重 / 警告 / 提醒，支持控制台、本地文件、服务器上报。"""
+"""应用日志：提醒/警告/严重 + 调试通道扇出（参考 Claude Code 多通道模型）。"""
 
 from __future__ import annotations
 
@@ -12,13 +12,18 @@ from typing import Any, Iterable
 from urllib import error, request
 
 import config as cfg
+from log import debug as debug_mod  # 子模块
+from log.errors import reset_error_state
 from log.run import ensure_run_log_path, get_run_log_path, reset_run_log_path
+from log.sinks import init_sinks
 
 
 class LogLevel(IntEnum):
-    NOTICE = 10  # 提醒
+    VERBOSE = 5
+    DEBUG = 8
+    NOTICE = 10  # 提醒 / info
     WARNING = 20  # 警告
-    CRITICAL = 30  # 严重
+    CRITICAL = 30  # 严重 / error
 
 
 class LogMode(str):
@@ -28,12 +33,16 @@ class LogMode(str):
 
 
 _LEVEL_NAMES = {
+    LogLevel.VERBOSE: "详尽",
+    LogLevel.DEBUG: "调试",
     LogLevel.NOTICE: "提醒",
     LogLevel.WARNING: "警告",
     LogLevel.CRITICAL: "严重",
 }
 
 _LEVEL_ALIASES = {
+    "verbose": LogLevel.VERBOSE,
+    "debug": LogLevel.DEBUG,
     "notice": LogLevel.NOTICE,
     "提醒": LogLevel.NOTICE,
     "info": LogLevel.NOTICE,
@@ -43,6 +52,14 @@ _LEVEL_ALIASES = {
     "critical": LogLevel.CRITICAL,
     "error": LogLevel.CRITICAL,
     "严重": LogLevel.CRITICAL,
+}
+
+_DEBUG_LEVEL_MAP = {
+    LogLevel.VERBOSE: "verbose",
+    LogLevel.DEBUG: "debug",
+    LogLevel.NOTICE: "info",
+    LogLevel.WARNING: "warn",
+    LogLevel.CRITICAL: "error",
 }
 
 
@@ -58,7 +75,7 @@ def _parse_level(value: Any) -> LogLevel:
 
 
 class Logger:
-    """多模式日志工具。"""
+    """多模式日志工具；开启 debug 时同步写入会话调试文件。"""
 
     def __init__(
         self,
@@ -79,7 +96,6 @@ class Logger:
         self.file_encoding = file_encoding
         self.server_url = server_url or ""
         self.server_timeout = server_timeout
-        # True：跟随本次进程运行日志文件（from_config）；False：固定 file_path
         self.bind_run = bind_run
         self._lock = threading.Lock()
 
@@ -93,9 +109,27 @@ class Logger:
         file_path: str | Path | None = None
         bind_run = False
         if configured:
-            # 每次进程运行使用独立文件，避免多实例共用 app.log
             file_path = ensure_run_log_path(configured, encoding=encoding)
             bind_run = True
+        # 调试配置
+        debug_cfg = section.get("debug") or {}
+        if debug_cfg.get("enabled"):
+            debug_mod.enable_debug_logging()
+        if debug_cfg.get("session_id"):
+            debug_mod.set_session_id(str(debug_cfg["session_id"]))
+        if debug_cfg.get("filter"):
+            import os
+
+            os.environ.setdefault(
+                "SELFAGENT_DEBUG_FILTER", str(debug_cfg.get("filter"))
+            )
+        if debug_cfg.get("dir"):
+            import os
+
+            os.environ.setdefault(
+                "SELFAGENT_DEBUG_LOGS_DIR", str(debug_cfg.get("dir"))
+            )
+        init_sinks()
         return cls(
             name=name,
             level=section.get("level", LogLevel.NOTICE),
@@ -107,6 +141,12 @@ class Logger:
             bind_run=bind_run,
         )
 
+    def verbose(self, message: str, **extra: Any) -> None:
+        self.log(LogLevel.VERBOSE, message, **extra)
+
+    def debug(self, message: str, **extra: Any) -> None:
+        self.log(LogLevel.DEBUG, message, **extra)
+
     def notice(self, message: str, **extra: Any) -> None:
         self.log(LogLevel.NOTICE, message, **extra)
 
@@ -116,13 +156,15 @@ class Logger:
     def critical(self, message: str, **extra: Any) -> None:
         self.log(LogLevel.CRITICAL, message, **extra)
 
-    # 别名，便于习惯用法
     info = notice
     error = critical
+    warn = warning
 
     def log(self, level: LogLevel | str, message: str, **extra: Any) -> None:
         parsed = _parse_level(level)
         if parsed < self.level:
+            # 低于应用阈值仍可进 debug 通道（若已开启且等级够）
+            self._fanout_debug(parsed, message)
             return
         record = self._build_record(parsed, message, extra)
         line = self._format_line(record)
@@ -133,6 +175,17 @@ class Logger:
                 self._write_file(line)
             if LogMode.SERVER in self.modes:
                 self._write_server(record)
+        self._fanout_debug(parsed, message)
+
+    def _fanout_debug(self, level: LogLevel, message: str) -> None:
+        if not debug_mod.is_debug_mode():
+            return
+        dbg_level = _DEBUG_LEVEL_MAP.get(level, "debug")
+        debug_mod.log_for_debugging(
+            message,
+            level=dbg_level,  # type: ignore[arg-type]
+            category=self.name,
+        )
 
     def _build_record(
         self, level: LogLevel, message: str, extra: dict[str, Any]
@@ -144,6 +197,7 @@ class Logger:
             "logger": self.name,
             "message": message,
             "extra": extra or {},
+            "session_id": debug_mod.get_session_id(),
         }
 
     def _format_line(self, record: dict[str, Any]) -> str:
@@ -193,16 +247,22 @@ class Logger:
             with request.urlopen(req, timeout=self.server_timeout) as resp:
                 resp.read()
         except error.URLError as exc:
-            # 上报失败时降级到控制台，避免递归依赖 env/log 初始化顺序
             sys.stderr.write(f"[日志上报失败] {exc}\n")
             sys.stderr.flush()
 
 
 _default_logger: Logger | None = None
+_sinks_ready = False
 
 
 def get_logger(name: str = "selfagent") -> Logger:
-    global _default_logger
+    global _default_logger, _sinks_ready
+    if not _sinks_ready:
+        try:
+            init_sinks()
+        except Exception:  # noqa: BLE001
+            pass
+        _sinks_ready = True
     if _default_logger is None or _default_logger.name != name:
         try:
             _default_logger = Logger.from_config(name=name)
@@ -212,6 +272,9 @@ def get_logger(name: str = "selfagent") -> Logger:
 
 
 def reset_logger() -> None:
-    global _default_logger
+    global _default_logger, _sinks_ready
     _default_logger = None
+    _sinks_ready = False
     reset_run_log_path()
+    debug_mod.reset_debug_state()
+    reset_error_state()

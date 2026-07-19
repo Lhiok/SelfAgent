@@ -5,8 +5,8 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "npm run dev -w @selfagent/desktop",
     "build": "npm run build -w @selfagent/client && npm run build -w @selfagent/desktop",
+    "build:electron": "npm run build:electron -w @selfagent/desktop",
     "start:desktop": "npm run start -w @selfagent/desktop"
   },
   "engines": {

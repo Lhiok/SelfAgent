@@ -30,6 +30,11 @@ from skills.web_fetch import WebFetchSkill
 
 logger = get_logger("skills")
 
+try:
+    from memory.skill import MemoryOpsSkill
+except Exception:  # noqa: BLE001
+    MemoryOpsSkill = None  # type: ignore[misc, assignment]
+
 
 class SkillRegistry:
     def __init__(self, permission: PermissionGuard | None = None) -> None:
@@ -47,6 +52,13 @@ class SkillRegistry:
             raise NotADirectoryError(f"工作目录不存在或不是目录: {path}")
         self.workdir = path
         for skill in self._skills.values():
+            if hasattr(skill, "set_workdir") and callable(skill.set_workdir):
+                try:
+                    skill.set_workdir(path)
+                    logger.notice(f"Skill {skill.name} root -> {path}")
+                    continue
+                except Exception:  # noqa: BLE001
+                    pass
             if hasattr(skill, "root"):
                 skill.root = path
                 logger.notice(f"Skill {skill.name} root -> {path}")
@@ -86,7 +98,13 @@ class SkillRegistry:
         if enforce_permission and guard is not None:
             decision = guard.assert_allowed(name, arguments=arguments)
             if not decision.allowed:
-                return SkillResult(ok=False, output=f"权限拒绝: {decision.reason}")
+                tip = ""
+                if getattr(decision, "suggestions", None):
+                    rules = ", ".join(s.rule_raw for s in decision.suggestions)
+                    tip = f"；会话放行: grant_session({rules!r})"
+                return SkillResult(
+                    ok=False, output=f"权限拒绝: {decision.reason}{tip}"
+                )
 
         skill = self.get(name)
         if skill is None:
@@ -292,6 +310,18 @@ class SkillRegistry:
             registry.register(
                 TodoTrackerSkill(
                     root=tt_cfg.get("root", root),
+                    enabled=True,
+                )
+            )
+
+        mem_cfg = section.get("memory_ops") or {}
+        if MemoryOpsSkill is not None and bool(mem_cfg.get("enabled", True)):
+            from memory import load_memory_config
+
+            registry.register(
+                MemoryOpsSkill(
+                    root=mem_cfg.get("root", root),
+                    config=load_memory_config(),
                     enabled=True,
                 )
             )
