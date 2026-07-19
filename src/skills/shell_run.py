@@ -6,6 +6,8 @@ import json
 import os
 import shlex
 import subprocess
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -171,13 +173,12 @@ class ShellRunSkill(Skill):
         except OSError as exc:
             return SkillResult(ok=False, output=f"执行失败: {exc}")
 
-        import threading
-        import time
-
         stdout_chunks: list[str] = []
         stderr_chunks: list[str] = []
 
         def _drain(stream, sink: list[str]) -> None:
+            if stream is None:
+                return
             try:
                 while True:
                     chunk = stream.read(4096)
@@ -197,45 +198,60 @@ class ShellRunSkill(Skill):
         err_t.start()
 
         deadline = time.monotonic() + max(0.1, timeout)
+        cancelled = False
+        timed_out = False
         try:
             while proc.poll() is None:
                 if control is not None and getattr(control, "cancel_requested", False):
+                    cancelled = True
                     proc.terminate()
                     try:
                         proc.wait(timeout=2)
                     except subprocess.TimeoutExpired:
                         proc.kill()
-                        proc.wait(timeout=2)
-                    out_t.join(timeout=1)
-                    err_t.join(timeout=1)
-                    return SkillResult(
-                        ok=False,
-                        output=f"已取消: {command}",
-                        data={"command": command, "argv": argv, "cancelled": True},
-                    )
+                        try:
+                            proc.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            pass
+                    break
                 if time.monotonic() >= deadline:
+                    timed_out = True
                     proc.kill()
                     try:
                         proc.wait(timeout=2)
                     except subprocess.TimeoutExpired:
                         pass
-                    out_t.join(timeout=1)
-                    err_t.join(timeout=1)
-                    return SkillResult(
-                        ok=False, output=f"命令超时（>{timeout}s）: {command}"
-                    )
+                    break
                 time.sleep(0.05)
-            out_t.join(timeout=max(0.1, timeout))
-            err_t.join(timeout=max(0.1, timeout))
-            stdout_raw = "".join(stdout_chunks)
-            stderr_raw = "".join(stderr_chunks)
+            out_t.join(timeout=1.5)
+            err_t.join(timeout=1.5)
         except Exception as exc:  # noqa: BLE001
             try:
                 proc.kill()
             except Exception:  # noqa: BLE001
                 pass
             return SkillResult(ok=False, output=f"执行失败: {exc}")
+        finally:
+            for stream in (proc.stdout, proc.stderr):
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except Exception:  # noqa: BLE001
+                        pass
 
+        if cancelled:
+            return SkillResult(
+                ok=False,
+                output=f"已取消: {command}",
+                data={"command": command, "argv": argv, "cancelled": True},
+            )
+        if timed_out:
+            return SkillResult(
+                ok=False, output=f"命令超时（>{timeout}s）: {command}"
+            )
+
+        stdout_raw = "".join(stdout_chunks)
+        stderr_raw = "".join(stderr_chunks)
         stdout = _clip(stdout_raw or "", self.max_output_chars)
         stderr = _clip(stderr_raw or "", self.max_output_chars)
         exit_code = proc.returncode if proc.returncode is not None else -1

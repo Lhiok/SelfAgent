@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, QTimer, Slot
 from PySide6.QtWidgets import (
     QFileDialog,
     QInputDialog,
@@ -281,6 +281,11 @@ class MainWindow(QMainWindow):
         etype = event.get("type")
         if etype == "status":
             msg = str(event.get("message") or event.get("phase") or "")
+            phase = str(event.get("phase") or "")
+            if phase == "thinking":
+                self.chat.set_live_thinking(True)
+            elif phase in {"acting", "ask_user", "done"}:
+                self.chat.set_live_thinking(False)
             self.chat.set_status(msg or "处理中…")
             self.chat.update_live_status(msg)
         elif etype == "assistant_delta":
@@ -296,6 +301,7 @@ class MainWindow(QMainWindow):
             step_i = int(step) if isinstance(step, int) else None
             self.chat.append_assistant_delta(delta, step=step_i, phase=phase or None)
         elif etype == "skill":
+            self.chat.set_live_thinking(False)
             self.chat.update_skill_event(event)
             msg = str(event.get("message") or "")
             if msg:
@@ -306,6 +312,7 @@ class MainWindow(QMainWindow):
             self.chat.set_status(msg)
             self._cancel_requested = True
         elif etype == "step":
+            self.chat.set_live_thinking(False)
             # replace or append by index
             idx = event.get("index")
             replaced = False
@@ -325,10 +332,12 @@ class MainWindow(QMainWindow):
             self._pending_ask = event
             self.chat.set_ask_visible(True)
             self.chat.set_status("等待你的选择…")
-            self._open_ask()
+            # 延后打开模态框，避免在 RunThread 信号栈内阻塞事件泵
+            QTimer.singleShot(0, self._open_ask)
         elif etype == "done":
-            # 先解除 busy，避免渲染慢时界面一直卡在「运行中」
+            # 先解除 busy / 结束 live，避免渲染慢或异常时界面卡在「进行中」
             self._set_busy(False)
+            self.chat.set_live_thinking(False)
             session = event.get("session") or {}
             self._session = session
             self._session_id = str(session.get("session_id") or self._session_id)
@@ -341,6 +350,11 @@ class MainWindow(QMainWindow):
                     self.inspector.show_text("过程细节", str(detail_text))
                 self._refresh_sidebar()
             except Exception as exc:  # noqa: BLE001
+                # 即使刷新失败也清掉 live 残影
+                try:
+                    self.chat.clear()
+                except Exception:  # noqa: BLE001
+                    pass
                 show_warning(self, "刷新会话失败", str(exc))
             if self._cancel_requested or str(session.get("answer") or "").startswith(
                 "已取消"
@@ -369,7 +383,9 @@ class MainWindow(QMainWindow):
         if not event:
             event = self.store.get_pending_ask(self._session_id)
         if not event:
-            show_info(self, "确认", "当前没有待确认的提问")
+            # 自动弹出时静默；手动点「打开确认面板」时再提示
+            if not self._busy:
+                show_info(self, "确认", "当前没有待确认的提问")
             self.chat.set_ask_visible(False)
             return
         dlg = AskDialog(event, self)

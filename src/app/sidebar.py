@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QAction, QCursor
+from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtGui import QAction, QCursor, QFontMetrics
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -20,6 +20,49 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+
+class ElidedLabel(QLabel):
+    """单行省略，避免长标题撑破选中底色或裁切成半个字。"""
+
+    def __init__(self, text: str = "", parent=None) -> None:
+        super().__init__(parent)
+        self._full = text or ""
+        self.setWordWrap(False)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.setMinimumWidth(0)
+        self.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        # 先放空串，真正绘制在 paintEvent，避免 resize 里 setText 递归
+        super().setText("")
+
+    def set_full_text(self, text: str) -> None:
+        self._full = text or ""
+        self.setToolTip(self._full)
+        self.update()
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        metrics = QFontMetrics(self.font())
+        return QSize(metrics.horizontalAdvance(self._full[:24] or "…"), metrics.height())
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        metrics = QFontMetrics(self.font())
+        return QSize(0, metrics.height())
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        from PySide6.QtGui import QPainter
+
+        painter = QPainter(self)
+        painter.setFont(self.font())
+        painter.setPen(self.palette().color(self.foregroundRole()))
+        metrics = QFontMetrics(self.font())
+        elided = metrics.elidedText(
+            self._full, Qt.TextElideMode.ElideRight, max(0, self.width())
+        )
+        painter.drawText(
+            self.contentsRect(),
+            int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
+            elided,
+        )
 
 
 class SessionRow(QFrame):
@@ -42,33 +85,38 @@ class SessionRow(QFrame):
         self.session_id = session_id
         self._starred = starred
         self.setObjectName("SessionRow")
-        self.setProperty("selected", selected)
-        self.setProperty("archived", archived)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setProperty("selected", "true" if selected else "false")
+        self.setProperty("archived", "true" if archived else "false")
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(32)
+        self.setMinimumWidth(0)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 4, 6, 4)
+        # 内容缩进；选中底色仍铺满行宽，与仓库头对齐
+        layout.setContentsMargins(18, 0, 8, 0)
         layout.setSpacing(6)
+        layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         self.star_btn = QToolButton()
         self.star_btn.setObjectName("StarButton")
         self.star_btn.setAutoRaise(True)
         self.star_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.star_btn.setFixedSize(QSize(20, 20))
         self._paint_star()
         self.star_btn.clicked.connect(self._on_star)
-        layout.addWidget(self.star_btn)
+        layout.addWidget(self.star_btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        self.title = QLabel(title)
+        self.title = ElidedLabel(title)
         self.title.setObjectName("SessionTitleLabel")
-        self.title.setWordWrap(False)
-        self.title.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        self.title.set_full_text(title)
         layout.addWidget(self.title, 1)
 
         if archived:
             tag = QLabel("归档")
             tag.setObjectName("ArchiveTag")
-            layout.addWidget(tag)
+            layout.addWidget(tag, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_menu)
@@ -86,10 +134,10 @@ class SessionRow(QFrame):
     def _paint_star(self) -> None:
         if self._starred:
             self.star_btn.setText("★")
-            self.star_btn.setProperty("starred", True)
+            self.star_btn.setProperty("starred", "true")
         else:
             self.star_btn.setText("☆")
-            self.star_btn.setProperty("starred", False)
+            self.star_btn.setProperty("starred", "false")
         self.star_btn.style().unpolish(self.star_btn)
         self.star_btn.style().polish(self.star_btn)
 
@@ -111,7 +159,7 @@ class SessionRow(QFrame):
         super().mousePressEvent(event)
 
     def set_selected(self, selected: bool) -> None:
-        self.setProperty("selected", selected)
+        self.setProperty("selected", "true" if selected else "false")
         self.style().unpolish(self)
         self.style().polish(self)
         self.update()
@@ -129,22 +177,28 @@ class WorkspaceBlock(QWidget):
         super().__init__(parent)
         self.workspace_id = str(ws["id"])
         self.setObjectName("WorkspaceBlock")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setMinimumWidth(0)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 6)
+        root.setContentsMargins(0, 0, 0, 8)
         root.setSpacing(2)
 
         # —— 仓库行：不进入“选中会话”状态 ——
         header = QFrame()
         header.setObjectName("WorkspaceHeader")
+        header.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         header.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+        header.setMinimumWidth(0)
         h = QHBoxLayout(header)
-        h.setContentsMargins(6, 6, 4, 6)
+        h.setContentsMargins(8, 6, 4, 6)
         h.setSpacing(8)
+        h.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         icon = QLabel("📁")
         icon.setObjectName("FolderIcon")
-        h.addWidget(icon)
+        icon.setFixedWidth(20)
+        h.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
 
         text_col = QVBoxLayout()
         text_col.setContentsMargins(0, 0, 0, 0)
@@ -152,10 +206,13 @@ class WorkspaceBlock(QWidget):
         title = str(ws.get("title") or "").strip()
         path = str(ws.get("path") or "")
         name = title or Path(path).name or self.workspace_id
-        self.name_label = QLabel(name)
+        self.name_label = ElidedLabel(name)
         self.name_label.setObjectName("WorkspaceName")
-        self.path_label = QLabel(_short_path(path))
+        self.name_label.set_full_text(name)
+        # 展示缩短路径，tooltip 仍是完整路径
+        self.path_label = ElidedLabel(_short_path(path))
         self.path_label.setObjectName("WorkspacePath")
+        self.path_label.set_full_text(_short_path(path))
         self.path_label.setToolTip(path)
         text_col.addWidget(self.name_label)
         text_col.addWidget(self.path_label)
@@ -167,22 +224,26 @@ class WorkspaceBlock(QWidget):
         self.btn_new.setText("+")
         self.btn_new.setToolTip("新建对话")
         self.btn_new.clicked.connect(lambda: self.new_session.emit(self.workspace_id))
-        h.addWidget(self.btn_new)
+        h.addWidget(self.btn_new, 0, Qt.AlignmentFlag.AlignTop)
 
         root.addWidget(header)
         header.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         header.customContextMenuRequested.connect(
-            lambda pos, h=header: self._show_workspace_menu(h, pos)
+            lambda pos, hdr=header: self._show_workspace_menu(hdr, pos)
         )
 
         self.sessions_wrap = QWidget()
         self.sessions_wrap.setObjectName("SessionList")
+        self.sessions_wrap.setMinimumWidth(0)
         self._sess_layout = QVBoxLayout(self.sessions_wrap)
-        self._sess_layout.setContentsMargins(22, 0, 0, 0)
-        self._sess_layout.setSpacing(1)
+        # 缩进改由 SessionRow 左边距承担，选中条与仓库同宽
+        self._sess_layout.setContentsMargins(0, 0, 0, 0)
+        self._sess_layout.setSpacing(2)
 
         for sess in ws.get("sessions") or []:
-            sid = str(sess.get("session_id") or "")
+            sid = str(sess.get("session_id") or "").strip()
+            if not sid:
+                continue
             title_s = str(sess.get("title") or sess.get("preview") or "新对话")
             starred = bool(sess.get("starred"))
             archived = bool(sess.get("archived"))
@@ -197,10 +258,9 @@ class WorkspaceBlock(QWidget):
             row.star_toggled.connect(self.session_star.emit)
             row.archive_requested.connect(self.session_archive.emit)
             row.delete_requested.connect(self.session_delete.emit)
-            row.setToolTip(str(sess.get("preview") or ""))
+            row.setToolTip(str(sess.get("preview") or title_s))
             self._sess_layout.addWidget(row)
 
-        self._sess_layout.addStretch(0)
         root.addWidget(self.sessions_wrap)
 
     def _show_workspace_menu(self, header: QWidget, pos) -> None:
@@ -249,11 +309,13 @@ class Sidebar(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._list_host = QWidget()
         self._list_host.setObjectName("SidebarList")
+        self._list_host.setMinimumWidth(0)
         self._list_layout = QVBoxLayout(self._list_host)
         self._list_layout.setContentsMargins(0, 0, 0, 0)
-        self._list_layout.setSpacing(4)
+        self._list_layout.setSpacing(6)
         self._list_layout.addStretch(1)
         scroll.setWidget(self._list_host)
         layout.addWidget(scroll, 1)
@@ -268,6 +330,7 @@ class Sidebar(QWidget):
             item = self._list_layout.takeAt(0)
             w = item.widget()
             if w is not None:
+                w.setParent(None)
                 w.deleteLater()
         self._blocks.clear()
 

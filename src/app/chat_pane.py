@@ -1445,6 +1445,8 @@ class ChatPane(QWidget):
         self._paint()
 
     def _set_live_inner(self, inner: str, *, role_included: bool = False) -> None:
+        if not self._live_active:
+            return
         if role_included:
             live = inner
         else:

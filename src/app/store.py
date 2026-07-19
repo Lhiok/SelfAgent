@@ -250,7 +250,7 @@ class WorkspaceStore:
             pending = self._pending_asks.pop(session_id, None)
         if pending and pending.get("queue") is not None:
             try:
-                pending["queue"].put_nowait("")
+                pending["queue"].put_nowait(ASK_CANCEL_SENTINEL)
             except queue.Full:
                 pass
         self._clear_ask_checkpoint(session_id)
@@ -651,7 +651,7 @@ class WorkspaceStore:
             }
         if old is not None and old.get("queue") is not None:
             try:
-                old["queue"].put_nowait("")
+                old["queue"].put_nowait(ASK_CANCEL_SENTINEL)
             except queue.Full:
                 pass
 

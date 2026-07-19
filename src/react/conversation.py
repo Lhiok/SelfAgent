@@ -218,9 +218,14 @@ class Conversation:
         if result.completed:
             self.pending_plan = None
         else:
-            # old_text 对不上时计划片段已过期，清掉以免用户反复点「确认执行」空转
+            # patch 片段失效时清掉 pending，避免用户反复点「确认执行」空转
             ans = result.answer or ""
-            if "未找到匹配的 old_text" in ans:
+            stale = (
+                "未找到匹配的 old_text" in ans
+                or "old_text 匹配到" in ans
+                or "不是文件或不存在" in ans
+            )
+            if stale:
                 self.pending_plan = None
                 result = replace(
                     result,
