@@ -23,6 +23,8 @@ copy config.example.yaml config.yaml   # 填入 ai.deepseek.api_key 等
 
 可选 extra：`dev`（pytest）、`skills`（截屏 / Playwright）。一次装全：`pip install -e ".[all]"`。
 
+**模块原理与架构（初学者）**：见 [docs/README.md](docs/README.md)。
+
 ## 快速使用
 
 ```python
