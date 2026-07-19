@@ -1030,6 +1030,7 @@ class ChatPane(QWidget):
         self._live_skills: list[dict[str, Any]] = []
         self._live_cancelled = False
         self._live_thinking = False
+        self._live_active = False
         self._live_dirty = False
         self._live_flush_timer = QTimer(self)
         self._live_flush_timer.setSingleShot(True)
@@ -1080,6 +1081,7 @@ class ChatPane(QWidget):
         self.mode_changed.emit(mode)
 
     def clear(self) -> None:
+        self._end_live_session()
         self._body_parts = []
         self._live_steps = []
         self._changes_by_key.clear()
@@ -1155,6 +1157,7 @@ class ChatPane(QWidget):
         self._live_skills = []
         self._live_cancelled = False
         self._live_thinking = False
+        self._live_active = True
         self._body_parts.append(("user", user_text))
         self._body_parts.append(
             ("live", "<div class='live'><div class='role'>助手 · 进行中</div></div>")
@@ -1245,6 +1248,7 @@ class ChatPane(QWidget):
         self._flush_live_panel()
 
     def finish_live(self, answer: str, *, ok: bool = True) -> None:
+        self._end_live_session()
         self._body_parts = _drop_live_parts(self._body_parts)
         segs = _compose_assistant_segments(answer, [])
         if segs:
@@ -1382,14 +1386,25 @@ class ChatPane(QWidget):
         return "<div class='meta'>" + "".join(chips) + "</div>"
 
     def _schedule_live_refresh(self) -> None:
+        if not self._live_active:
+            return
         self._live_dirty = True
         if not self._live_flush_timer.isActive():
             self._live_flush_timer.start()
+
+    def _end_live_session(self) -> None:
+        """结束直播态并取消待刷新，避免 render_session 后定时器把「进行中」刷回。"""
+        self._live_active = False
+        self._live_dirty = False
+        if self._live_flush_timer.isActive():
+            self._live_flush_timer.stop()
 
     def _flush_live_panel(self) -> None:
         self._live_dirty = False
         if self._live_flush_timer.isActive():
             self._live_flush_timer.stop()
+        if not self._live_active:
+            return
         self._refresh_live_panel()
 
     def _build_live_html(self) -> str:
@@ -1415,6 +1430,8 @@ class ChatPane(QWidget):
         return "".join(parts)
 
     def _refresh_live_panel(self) -> None:
+        if not self._live_active:
+            return
         live = self._build_live_html()
         for i, (kind, _) in enumerate(self._body_parts):
             if kind == "live":

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -215,6 +215,20 @@ class Conversation:
         )
         executor = self.agent.with_mode(AgentMode.AGENT)
         result = executor.execute_plan(target, history=list(self.messages))
+        if result.completed:
+            self.pending_plan = None
+        else:
+            # old_text 对不上时计划片段已过期，清掉以免用户反复点「确认执行」空转
+            ans = result.answer or ""
+            if "未找到匹配的 old_text" in ans:
+                self.pending_plan = None
+                result = replace(
+                    result,
+                    answer=ans + " 计划片段已失效，请重新 read 后生成计划再确认。",
+                    plan=None,
+                )
+            else:
+                self.pending_plan = target
         # 把执行过程记入对话，便于后续追问
         self.messages.append(AIMessage(role="user", content=user_note))
         self.messages.append(
@@ -236,10 +250,6 @@ class Conversation:
                 ask_answers=collect_ask_answers_from_steps(result.steps),
             )
         )
-        if result.completed:
-            self.pending_plan = None
-        else:
-            self.pending_plan = target
         if self.persist_dir is not None:
             self.save()
         return result
