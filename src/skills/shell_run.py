@@ -160,6 +160,7 @@ class ShellRunSkill(Skill):
             proc = subprocess.Popen(
                 argv,
                 cwd=str(cwd),
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -170,7 +171,30 @@ class ShellRunSkill(Skill):
         except OSError as exc:
             return SkillResult(ok=False, output=f"执行失败: {exc}")
 
+        import threading
         import time
+
+        stdout_chunks: list[str] = []
+        stderr_chunks: list[str] = []
+
+        def _drain(stream, sink: list[str]) -> None:
+            try:
+                while True:
+                    chunk = stream.read(4096)
+                    if not chunk:
+                        break
+                    sink.append(chunk)
+            except Exception:  # noqa: BLE001
+                pass
+
+        out_t = threading.Thread(
+            target=_drain, args=(proc.stdout, stdout_chunks), daemon=True
+        )
+        err_t = threading.Thread(
+            target=_drain, args=(proc.stderr, stderr_chunks), daemon=True
+        )
+        out_t.start()
+        err_t.start()
 
         deadline = time.monotonic() + max(0.1, timeout)
         try:
@@ -182,6 +206,8 @@ class ShellRunSkill(Skill):
                     except subprocess.TimeoutExpired:
                         proc.kill()
                         proc.wait(timeout=2)
+                    out_t.join(timeout=1)
+                    err_t.join(timeout=1)
                     return SkillResult(
                         ok=False,
                         output=f"已取消: {command}",
@@ -193,11 +219,16 @@ class ShellRunSkill(Skill):
                         proc.wait(timeout=2)
                     except subprocess.TimeoutExpired:
                         pass
+                    out_t.join(timeout=1)
+                    err_t.join(timeout=1)
                     return SkillResult(
                         ok=False, output=f"命令超时（>{timeout}s）: {command}"
                     )
                 time.sleep(0.05)
-            stdout_raw, stderr_raw = proc.communicate()
+            out_t.join(timeout=max(0.1, timeout))
+            err_t.join(timeout=max(0.1, timeout))
+            stdout_raw = "".join(stdout_chunks)
+            stderr_raw = "".join(stderr_chunks)
         except Exception as exc:  # noqa: BLE001
             try:
                 proc.kill()

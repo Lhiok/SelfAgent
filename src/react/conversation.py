@@ -78,8 +78,8 @@ class Conversation:
             if max_history_messages is not None
             else int(conv_cfg.get("max_history_messages", 40))
         )
-        self.compact_after_messages, self.compact_keep_recent = compaction_settings(
-            conv_cfg
+        self.compact_after_messages, self.compact_keep_recent, self.compact_use_ai = (
+            compaction_settings(conv_cfg)
         )
         self.inject_continuous_hint = (
             inject_continuous_hint
@@ -543,9 +543,11 @@ class Conversation:
 
     def _trim_history(self) -> None:
         if self.compact_after_messages > 0:
+            # 热路径默认硬截断，避免同步 ai.ask 挡住 store 的 done/busy
+            ai = self.agent.ai if self.compact_use_ai else None
             self.messages = compact_messages(
                 self.messages,
-                ai=self.agent.ai,
+                ai=ai,
                 compact_after=self.compact_after_messages,
                 keep_recent=self.compact_keep_recent,
             )

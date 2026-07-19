@@ -103,8 +103,10 @@ def compact_messages(
     return [*system, summary_msg, *recent]
 
 
-def compaction_settings(conv_cfg: dict[str, Any] | None) -> tuple[int, int]:
+def compaction_settings(conv_cfg: dict[str, Any] | None) -> tuple[int, int, bool]:
+    """返回 (compact_after, keep_recent, use_ai)。热路径默认不用 AI 摘要，避免挡住 done。"""
     cfg = conv_cfg or {}
     after = int(cfg.get("compact_after_messages", 0) or 0)
     keep = int(cfg.get("compact_keep_recent", 12) or 12)
-    return after, keep
+    use_ai = bool(cfg.get("compact_use_ai", False))
+    return after, keep, use_ai

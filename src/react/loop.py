@@ -230,12 +230,22 @@ class LoopMixin:
     def _chat_model(self: ReActAgent, messages: list[AIMessage], step_index: int) -> str:
         """调用模型；优先流式并推送 delta，失败则降级为一次性 chat。"""
         stream_enabled = bool(getattr(self, "stream_ai", True))
+        cancelled = (
+            hasattr(self, "control")
+            and self.control is not None
+            and self.control.cancel_requested
+        )
+        if cancelled:
+            return ""
+
         if stream_enabled and hasattr(self.ai, "chat_stream"):
             parts: list[str] = []
+            was_cancelled = False
             try:
                 for event in self.ai.chat_stream(messages):
                     if hasattr(self, "control") and self.control is not None:
                         if self.control.cancel_requested:
+                            was_cancelled = True
                             break
                     text = event if isinstance(event, str) else getattr(event, "text", "") or ""
                     if not text:
@@ -246,13 +256,34 @@ class LoopMixin:
                             "type": "assistant_delta",
                             "step": step_index,
                             "delta": text,
+                            "phase": "thinking",
                         }
                     )
+                if was_cancelled or (
+                    hasattr(self, "control")
+                    and self.control is not None
+                    and self.control.cancel_requested
+                ):
+                    # 取消后绝不回落同步 chat，否则 UI 会卡在「正在停止…」
+                    return "".join(parts).strip()
                 content = "".join(parts).strip()
                 if content:
                     return content
             except Exception as exc:  # noqa: BLE001
+                if (
+                    hasattr(self, "control")
+                    and self.control is not None
+                    and self.control.cancel_requested
+                ):
+                    return "".join(parts).strip()
                 logger.warning(f"流式调用失败，降级为非流式: {exc}")
+
+        if (
+            hasattr(self, "control")
+            and self.control is not None
+            and self.control.cancel_requested
+        ):
+            return ""
         response = self.ai.chat(messages)
         return (response.content or "").strip()
 

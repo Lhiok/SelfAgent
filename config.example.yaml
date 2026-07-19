@@ -54,6 +54,8 @@ react:
     compact_after_messages: 32
     # 压缩时保留的最近消息条数
     compact_keep_recent: 12
+    # 热路径是否用 AI 做摘要（默认 false，避免回合结束后同步摘要挡住 UI done）
+    compact_use_ai: false
     # 是否在后续轮次注入“连续对话”提示
     inject_hint: true
     # 会话持久化目录；空则默认 logs/sessions（支持 --resume / /load）
