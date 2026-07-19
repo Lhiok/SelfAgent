@@ -1,0 +1,27 @@
+{
+  "name": "@selfagent/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json --noEmit && vite build && tsc -p tsconfig.electron.json",
+    "build:electron": "tsc -p tsconfig.electron.json",
+    "start": "npm run build:electron && electron .",
+    "electron:dev": "npm run build:electron && electron ."
+  },
+  "dependencies": {
+    "@selfagent/client": "*",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^34.2.0",
+    "typescript": "^5.8.2",
+    "vite": "^6.2.0"
+  }
+}

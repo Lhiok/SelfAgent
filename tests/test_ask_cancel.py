@@ -6,7 +6,7 @@ import queue
 import threading
 import time
 
-from app.store import ASK_CANCEL_SENTINEL, WorkspaceStore
+from web.store import ASK_CANCEL_SENTINEL, WorkspaceStore
 
 
 def test_cancel_run_wakes_pending_ask(tmp_path):

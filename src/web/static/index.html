@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SelfAgent Workbench</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/assets/app.css" />
+  </head>
+  <body>
+    <div id="app" class="shell">
+      <aside class="sidebar">
+        <header class="brand">
+          <div class="brand-mark">SA</div>
+          <div>
+            <div class="brand-name">SelfAgent</div>
+            <div class="brand-sub">Workbench</div>
+          </div>
+        </header>
+
+        <section class="pane grow">
+          <div class="pane-head">
+            <h2>工作区</h2>
+            <div class="pane-actions">
+              <button
+                type="button"
+                id="btn-toggle-archived"
+                class="btn ghost sm"
+                title="显示/隐藏已归档"
+              >
+                归档
+              </button>
+              <button type="button" id="btn-add-ws" class="btn ghost" title="添加工作目录">+</button>
+            </div>
+          </div>
+          <form id="form-add-ws" class="inline-form hidden">
+            <input
+              id="input-ws-alias"
+              type="text"
+              placeholder="别名（可选），如 主项目"
+              autocomplete="off"
+              maxlength="64"
+            />
+            <input
+              id="input-ws-path"
+              type="text"
+              placeholder="绝对路径，如 D:\projects\demo"
+              autocomplete="off"
+            />
+            <div class="row">
+              <button type="submit" class="btn primary">添加</button>
+              <button type="button" id="btn-cancel-ws" class="btn ghost">取消</button>
+            </div>
+          </form>
+          <div id="workspace-tree" class="tree"></div>
+        </section>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div class="topbar-meta">
+            <div id="session-title" class="session-title">选择或新建对话</div>
+            <div id="session-path" class="session-path"></div>
+          </div>
+          <div class="topbar-actions">
+            <div class="seg" role="group" aria-label="模式">
+              <button type="button" data-mode="agent" class="seg-btn active">Agent</button>
+              <button type="button" data-mode="plan" class="seg-btn">Plan</button>
+            </div>
+            <label class="select-wrap">
+              <span>细节</span>
+              <select id="select-detail">
+                <option value="off">off</option>
+                <option value="summary">summary</option>
+                <option value="full">full</option>
+              </select>
+            </label>
+            <button type="button" id="btn-delete-session" class="btn ghost danger" disabled>
+              删除
+            </button>
+          </div>
+        </header>
+
+        <section id="messages" class="messages">
+          <div class="empty-state">
+            <p class="empty-title">SelfAgent</p>
+            <p>添加工作目录，再新建对话开始任务。</p>
+          </div>
+        </section>
+
+        <div id="todo-bar" class="todo-bar hidden" aria-label="任务清单"></div>
+
+        <footer class="composer">
+          <form id="form-chat">
+            <textarea
+              id="input-message"
+              rows="3"
+              placeholder="描述任务…（Enter 发送，Shift+Enter 换行）"
+              disabled
+            ></textarea>
+            <div class="composer-bar">
+              <span id="status-text" class="status">就绪</span>
+              <div class="composer-actions">
+                <button
+                  type="button"
+                  id="btn-open-ask"
+                  class="btn primary sm hidden"
+                  title="打开右侧确认面板"
+                >
+                  打开确认面板
+                </button>
+                <button
+                  type="button"
+                  id="btn-sound"
+                  class="btn ghost sm"
+                  title="声音提示开关（点击可试听）"
+                  aria-label="声音提示开关"
+                >
+                  音
+                </button>
+                <button
+                  type="button"
+                  id="btn-cancel-run"
+                  class="btn ghost danger sm hidden"
+                  title="取消当前任务"
+                >
+                  停止
+                </button>
+                <button type="submit" id="btn-send" class="btn primary" disabled>发送</button>
+              </div>
+            </div>
+          </form>
+        </footer>
+      </main>
+
+      <div
+        id="resize-inspector"
+        class="resize-handle hidden"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="拖拽调整对话与改动面板宽度"
+        title="拖拽调整宽度"
+      ></div>
+
+      <aside id="change-panel" class="change-panel hidden" aria-label="详情面板">
+        <header class="change-panel-head">
+          <div class="change-panel-titles">
+            <div id="change-panel-kind" class="change-panel-kind"></div>
+            <div id="change-panel-path" class="change-panel-path"></div>
+          </div>
+          <div class="change-panel-head-actions">
+            <label class="width-edit" title="右侧面板宽度（像素）">
+              <span>宽</span>
+              <input id="input-inspector-width" type="number" min="240" max="1200" step="10" />
+            </label>
+            <button type="button" id="btn-close-change" class="btn ghost sm" title="关闭">✕</button>
+          </div>
+        </header>
+        <div id="change-panel-body" class="change-panel-body"></div>
+      </aside>
+    </div>
+    <script src="/assets/vendor/marked.min.js"></script>
+    <script src="/assets/vendor/purify.min.js"></script>
+    <script src="/assets/app.js"></script>
+  </body>
+</html>

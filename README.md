@@ -1,31 +1,21 @@
 # SelfAgent（app 分支）
 
-本分支提供 **Windows 独立窗口应用**（PySide6），区别于浏览器 `web` 与终端 `cli`。通用核心与 `main` 对齐。
+本分支提供 **TypeScript 桌面工作台**（Electron + FastAPI + web SPA），已移除 PySide6。通用核心与 `main` 对齐。详见 [docs/desktop-ts.md](docs/desktop-ts.md)。
 
 ## 启动
 
 ```bash
-pip install -e ".[app]"
+pip install -e ".[ui]"
+npm install
 start.bat
 # 或: python start.py
-# 或: python -m app
 # 或: selfagent-app
+# 仅浏览器: python start.py --browser
 ```
 
-原生 PySide6 工作台，功能对齐 `web` 浏览器端（不内嵌网页）：
-
-- 多工作区 / 多会话侧栏（收藏、归档、折叠、重命名）
-- Agent / Plan、细节级别、流式步骤与工具摘要
-- 待确认计划、文件 diff 检视、打开本地文件
-- 多题 `ask_user`、todo 进度条
-- 会话落盘：`logs/workspaces/`（与 web 共用格式，可互通）
-
-可选打包：
-
-```bash
-pip install pyinstaller
-pyinstaller -F -w -n SelfAgent src/app/__main__.py
-```
+- Electron 窗口加载本地工作台（自动拉起 API）
+- React 源码在 `packages/desktop`；类型化客户端在 `packages/client`
+- 会话落盘：`logs/workspaces/`（与 web 共用格式）
 
 ---
 

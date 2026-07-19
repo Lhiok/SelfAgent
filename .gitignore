@@ -64,3 +64,9 @@ desktop.ini
 # Packaging / install leftovers
 src/*.egg-info/
 *.pth
+
+# Node / TypeScript desktop
+node_modules/
+packages/*/node_modules/
+packages/*/dist/
+packages/*/dist-electron/

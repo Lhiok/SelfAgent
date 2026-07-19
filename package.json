@@ -1,0 +1,15 @@
+{
+  "name": "selfagent",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @selfagent/desktop",
+    "build": "npm run build -w @selfagent/client && npm run build -w @selfagent/desktop",
+    "start:desktop": "npm run start -w @selfagent/desktop"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

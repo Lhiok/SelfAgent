@@ -18,7 +18,7 @@ from permission import PermissionGuard
 from react import AgentMode, Conversation, ReActAgent
 from skills import AskUserSkill, SkillRegistry
 
-logger = get_logger("app.store")
+logger = get_logger("web.store")
 
 DEFAULT_ROOT = Path("logs/workspaces")
 ASK_USER_TIMEOUT_SEC = 1800.0
