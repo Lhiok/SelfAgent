@@ -65,6 +65,9 @@ desktop.ini
 src/*.egg-info/
 *.pth
 
+# Local agent runtime (memory / plans / workflow runs)
+.selfagent/
+
 # Node / TypeScript desktop
 node_modules/
 packages/*/node_modules/
