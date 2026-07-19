@@ -284,6 +284,10 @@ class MainWindow(QMainWindow):
             self.chat.set_status(msg or "处理中…")
             self.chat.update_live_status(msg)
         elif etype == "assistant_delta":
+            # 思考阶段不刷草稿，直接丢弃，防止事件风暴卡住 UI
+            status = self.chat.status.text() if hasattr(self.chat, "status") else ""
+            if "思考" in status:
+                return
             delta = str(event.get("delta") or "")
             step = event.get("step")
             step_i = int(step) if isinstance(step, int) else None
@@ -320,21 +324,29 @@ class MainWindow(QMainWindow):
             self.chat.set_status("等待你的选择…")
             self._open_ask()
         elif etype == "done":
+            # 先解除 busy，避免渲染慢时界面一直卡在「运行中」
+            self._set_busy(False)
             session = event.get("session") or {}
             self._session = session
             self._session_id = str(session.get("session_id") or self._session_id)
-            self._apply_session_header(session)
-            self._pending_ask = session.get("pending_ask")
-            self.chat.render_session(session)
-            detail_text = session.get("detail_text")
-            if detail_text:
-                self.inspector.show_text("过程细节", str(detail_text))
-            self._refresh_sidebar()
+            try:
+                self._apply_session_header(session)
+                self._pending_ask = session.get("pending_ask")
+                self.chat.render_session(session)
+                detail_text = session.get("detail_text")
+                if detail_text:
+                    self.inspector.show_text("过程细节", str(detail_text))
+                self._refresh_sidebar()
+            except Exception as exc:  # noqa: BLE001
+                show_warning(self, "刷新会话失败", str(exc))
             if self._cancel_requested or str(session.get("answer") or "").startswith(
                 "已取消"
             ):
                 self.chat.set_status("已取消")
+            else:
+                self.chat.set_status("就绪")
         elif etype == "error":
+            self._set_busy(False)
             self.chat.finish_live(str(event.get("message") or "未知错误"), ok=False)
             self.chat.set_status("出错")
 
@@ -342,7 +354,7 @@ class MainWindow(QMainWindow):
     def _on_run_finished(self) -> None:
         self._set_busy(False)
         cur = self.chat.status.text()
-        if cur not in {"出错", "已取消"}:
+        if cur not in {"出错", "已取消", "就绪"}:
             self.chat.set_status("就绪")
         self._run = None
         self._cancel_requested = False

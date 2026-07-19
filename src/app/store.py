@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import queue
 import threading
+import time
 import uuid
 from collections.abc import Iterator
 from datetime import datetime, timezone
@@ -374,14 +375,21 @@ class WorkspaceStore:
         )
 
     def cancel_run(self, session_id: str) -> dict[str, Any]:
-        """请求取消当前正在执行的 turn。"""
-        conv = self._get_or_load(session_id)
+        """请求取消当前正在执行的 turn（不抢会话锁，避免与运行线程死锁）。"""
+        with self._global:
+            conv = self._convs.get(session_id.strip())
+        if conv is None:
+            # 未在跑则无需加载整会话
+            return {"ok": False, "session_id": session_id, "cancelled": False}
         conv.cancel()
         return {"ok": True, "session_id": session_id, "cancelled": True}
 
     def enqueue_message(self, session_id: str, text: str) -> dict[str, Any]:
         """向当前 turn 队列中途补充用户消息。"""
-        conv = self._get_or_load(session_id)
+        with self._global:
+            conv = self._convs.get(session_id.strip())
+        if conv is None:
+            return {"ok": False, "session_id": session_id, "enqueued": False}
         conv.enqueue(text)
         return {"ok": True, "session_id": session_id, "enqueued": True}
 
@@ -408,8 +416,48 @@ class WorkspaceStore:
         runner,
     ) -> Iterator[dict[str, Any]]:
         q: queue.Queue[tuple[str, Any]] = queue.Queue()
+        # 合并流式 delta，避免把 Qt 事件队列打满导致界面假死、done 迟迟无法处理
+        delta_lock = threading.Lock()
+        delta_buf = {"text": "", "step": None, "last": 0.0}
+
+        def _flush_delta(*, force: bool = False) -> None:
+            with delta_lock:
+                text = delta_buf["text"]
+                if not text:
+                    return
+                now = time.monotonic()
+                if not force and (now - float(delta_buf["last"])) < 0.12 and len(text) < 160:
+                    return
+                step = delta_buf["step"]
+                delta_buf["text"] = ""
+                delta_buf["last"] = now
+            q.put(
+                (
+                    "progress",
+                    {
+                        "type": "assistant_delta",
+                        "step": step,
+                        "delta": text,
+                    },
+                )
+            )
 
         def on_progress(event: dict[str, Any]) -> None:
+            if isinstance(event, dict) and event.get("type") == "assistant_delta":
+                with delta_lock:
+                    delta_buf["text"] += str(event.get("delta") or "")
+                    if event.get("step") is not None:
+                        delta_buf["step"] = event.get("step")
+                    # 过长直接截断缓冲，UI 本就不展示全文
+                    if len(delta_buf["text"]) > 4000:
+                        delta_buf["text"] = "…" + delta_buf["text"][-2000:]
+                    ready = (time.monotonic() - float(delta_buf["last"])) >= 0.12 or len(
+                        delta_buf["text"]
+                    ) >= 160
+                if ready:
+                    _flush_delta(force=True)
+                return
+            _flush_delta(force=True)
             q.put(("progress", event))
 
         def worker() -> None:
@@ -429,12 +477,14 @@ class WorkspaceStore:
                         detail["completed"] = result.completed
                         detail["detail_text"] = result.detail_text
                         detail["detail_level"] = result.detail_level
+                        _flush_delta(force=True)
                         q.put(("done", detail))
                     finally:
                         conv.agent.on_progress = prev_progress
             except Exception as exc:  # noqa: BLE001
                 q.put(("error", exc))
             finally:
+                _flush_delta(force=True)
                 q.put(("end", None))
 
         yield {
