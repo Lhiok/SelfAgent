@@ -1,4 +1,4 @@
-﻿"""DeepSeek 提供商（OpenAI 兼容 Chat Completions）。"""
+﻿"""DeepSeek 提供商（OpenAI 兼容 Chat Completions + tools）。"""
 
 from __future__ import annotations
 
@@ -7,7 +7,14 @@ from typing import Any, Iterable, Iterator
 
 import httpx
 
-from ai.base import AIClient, AIMessage, AIResponse, ChatOptions, StreamEvent
+from ai.base import (
+    AIClient,
+    AIMessage,
+    AIResponse,
+    ChatOptions,
+    StreamEvent,
+    parse_tool_calls_from_message,
+)
 from env import get_env
 from log import get_logger
 
@@ -74,19 +81,7 @@ class DeepSeekClient(AIClient):
             raise RuntimeError("DeepSeek API Key 未配置，无法发起请求")
 
         model = options.model or self.model
-        body: dict[str, Any] = {
-            "model": model,
-            "messages": [
-                {"role": m.role, "content": m.content, **({"name": m.name} if m.name else {})}
-                for m in messages
-            ],
-        }
-        if options.temperature is not None:
-            body["temperature"] = options.temperature
-        if options.max_tokens is not None:
-            body["max_tokens"] = options.max_tokens
-        if options.extra:
-            body.update(options.extra)
+        body = self._build_body(messages, options, model=model, stream=False)
 
         url = f"{self.base_url}/chat/completions"
         headers = {
@@ -95,8 +90,8 @@ class DeepSeekClient(AIClient):
         }
 
         logger.notice(
-            f"请求 DeepSeek: model={model} read_timeout={self.timeout.read}s "
-            f"retries={self.retries}"
+            f"请求 DeepSeek: model={model} tools={bool(options.tools)} "
+            f"read_timeout={self.timeout.read}s retries={self.retries}"
         )
         data: dict[str, Any] | None = None
         resp: httpx.Response | None = None
@@ -134,17 +129,20 @@ class DeepSeekClient(AIClient):
             raise RuntimeError(f"DeepSeek 错误: {data}")
 
         try:
-            content = data["choices"][0]["message"]["content"] or ""
+            message = data["choices"][0]["message"] or {}
+            content = message.get("content") or ""
+            tool_calls = parse_tool_calls_from_message(message)
         except (KeyError, IndexError, TypeError) as exc:
             logger.critical(f"DeepSeek 响应解析失败: {data}")
             raise RuntimeError("DeepSeek 响应格式异常") from exc
 
         return AIResponse(
-            content=content,
+            content=content if isinstance(content, str) else str(content or ""),
             model=data.get("model", model),
             provider=self.provider,
             raw=data,
             usage=data.get("usage") or {},
+            tool_calls=tool_calls,
         )
 
     def chat_stream(
@@ -153,25 +151,19 @@ class DeepSeekClient(AIClient):
         options: ChatOptions | None = None,
     ) -> Iterator[str | StreamEvent]:
         options = options or ChatOptions()
+        # tools 回合强制非流式，保证 tool_calls 完整
+        if options.tools:
+            resp = self.chat(messages, options)
+            if resp.content:
+                yield StreamEvent(text=resp.content, done=False)
+            yield StreamEvent(text="", done=True)
+            return
+
         if not self.api_key:
             raise RuntimeError("DeepSeek API Key 未配置，无法发起请求")
 
         model = options.model or self.model
-        body: dict[str, Any] = {
-            "model": model,
-            "stream": True,
-            "messages": [
-                {"role": m.role, "content": m.content, **({"name": m.name} if m.name else {})}
-                for m in messages
-            ],
-        }
-        if options.temperature is not None:
-            body["temperature"] = options.temperature
-        if options.max_tokens is not None:
-            body["max_tokens"] = options.max_tokens
-        if options.extra:
-            body.update(options.extra)
-            body["stream"] = True
+        body = self._build_body(messages, options, model=model, stream=True)
 
         url = f"{self.base_url}/chat/completions"
         headers = {
@@ -214,3 +206,31 @@ class DeepSeekClient(AIClient):
                         continue
                     if text:
                         yield StreamEvent(text=text, done=False)
+
+    def _build_body(
+        self,
+        messages: Iterable[AIMessage],
+        options: ChatOptions,
+        *,
+        model: str,
+        stream: bool,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "model": model,
+            "messages": [m.to_api_dict() for m in messages],
+        }
+        if stream:
+            body["stream"] = True
+        if options.temperature is not None:
+            body["temperature"] = options.temperature
+        if options.max_tokens is not None:
+            body["max_tokens"] = options.max_tokens
+        if options.tools:
+            body["tools"] = options.tools
+            if options.tool_choice is not None:
+                body["tool_choice"] = options.tool_choice
+        if options.extra:
+            body.update(options.extra)
+            if stream:
+                body["stream"] = True
+        return body

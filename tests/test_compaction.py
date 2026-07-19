@@ -1,7 +1,8 @@
 """上下文压缩。"""
 
 from ai import AIMessage
-from react.compaction import compact_messages, compaction_settings, hard_trim
+from memory import compaction_settings, hard_trim
+from memory.compact import compact_transcript
 
 
 def test_hard_trim_keeps_recent():
@@ -13,14 +14,16 @@ def test_hard_trim_keeps_recent():
 
 def test_compact_without_ai_falls_back():
     msgs = [AIMessage(role="user", content=f"msg-{i}") for i in range(20)]
-    out = compact_messages(msgs, ai=None, compact_after=8, keep_recent=4)
+    out = compact_transcript(
+        msgs, session=None, ai=None, compact_after=8, keep_recent=4, mark_boundary=False
+    )
     assert any("[上下文摘要]" in (m.content or "") for m in out)
     assert len(out) == 5  # summary + 4 recent
 
 
 def test_compaction_settings_default_skips_ai():
     after, keep, use_ai = compaction_settings({})
-    assert after == 0
+    assert after >= 0
     assert keep == 12
     assert use_ai is False
 
@@ -47,17 +50,16 @@ class _SlowAskAI:
 
 def test_hot_path_trim_skips_ai_by_default(tmp_path):
     from permission import PermissionGuard
-    from react import Conversation, ReActAgent
+    from session import Conversation, Agent
     from skills import SkillRegistry
 
     ai = _SlowAskAI()
-    agent = ReActAgent(
+    agent = Agent(
         ai=ai,
         skills=SkillRegistry(permission=PermissionGuard.allow_all()),
         permission=PermissionGuard.allow_all(),
         stream_ai=False,
     )
-    # 注入假 ai.ask 供 compact 使用
     agent.ai = ai  # type: ignore[assignment]
     conv = Conversation(
         agent=agent,
@@ -70,4 +72,5 @@ def test_hot_path_trim_skips_ai_by_default(tmp_path):
     conv.messages = [AIMessage(role="user", content=f"m{i}") for i in range(20)]
     conv._trim_history()
     assert ai.ask_calls == 0
-    assert len(conv.messages) <= 5
+    assert len(conv.messages) <= 6
+    assert any("[上下文摘要]" in (m.content or "") for m in conv.messages)

@@ -102,8 +102,11 @@ class SkillBridge:
         *,
         output_max_chars: int | None = None,
         output_max_bytes: int | None = None,
+        mcp_manager: Any | None = None,
     ) -> None:
         self.registry = registry
+        self.mcp_manager = mcp_manager
+        self._subagent_ctx: dict[str, Any] = {}
         skills_cfg = cfg.get_section("skills", {}) or {}
         self.output_max_chars = (
             output_max_chars
@@ -116,6 +119,12 @@ class SkillBridge:
             if output_max_bytes is not None
             else (int(raw_bytes) if raw_bytes not in (None, "") else None)
         )
+
+    def set_mcp_manager(self, manager: Any | None) -> None:
+        self.mcp_manager = manager
+
+    def bind_subagent_context(self, **kwargs: Any) -> None:
+        self._subagent_ctx.update(kwargs)
 
     def invoke(
         self,
@@ -152,11 +161,31 @@ class SkillBridge:
                 tip = ""
                 if getattr(decision, "suggestions", None):
                     rules = ", ".join(s.rule_raw for s in decision.suggestions)
-                    tip = f"；会话放行: grant_session({rules!r})" if rules else ""
+                    tip = f"；会话放行: grant_session({rules!r})"
                 logger.warning(f"权限拒绝: {decision.reason}{tip}")
                 return SkillResult(
                     ok=False, output=f"权限拒绝: {decision.reason}{tip}"
                 )
+
+        if name == "run_subagent":
+            result = self._invoke_subagent(args, on_progress=on_progress)
+            return _truncate_output(
+                result,
+                max_chars=self.output_max_chars,
+                max_bytes=self.output_max_bytes,
+            )
+
+        from mcp.pool import is_mcp_tool
+
+        if is_mcp_tool(name):
+            result = self._invoke_mcp(name, args)
+            result = _truncate_output(
+                result,
+                max_chars=self.output_max_chars,
+                max_bytes=self.output_max_bytes,
+            )
+            self._emit_post_tool(name, args, result)
+            return result
 
         skill = self.registry.get(name)
         if skill is None:
@@ -211,7 +240,84 @@ class SkillBridge:
             except Exception as exc:  # noqa: BLE001
                 logger.warning(f"skill progress 回调失败: {exc}")
 
+        self._emit_post_tool(name, args, result)
         return result
+
+    def _invoke_mcp(self, name: str, args: dict[str, Any]) -> SkillResult:
+        mgr = self.mcp_manager
+        if mgr is None:
+            return SkillResult(ok=False, output="MCP 未配置或未连接")
+        ok, text, data = mgr.call(name, args)
+        return SkillResult(ok=ok, output=text, data=data)
+
+    def _invoke_subagent(
+        self,
+        args: dict[str, Any],
+        *,
+        on_progress: ProgressHandler | None = None,
+    ) -> SkillResult:
+        from subagent.spawn import run_subagent
+
+        prompt = str(args.get("prompt") or "").strip()
+        if not prompt:
+            return SkillResult(ok=False, output="run_subagent 需要 prompt")
+        ctx = self._subagent_ctx
+        ai = ctx.get("ai")
+        skills = ctx.get("skills") or self.registry
+        permission = ctx.get("permission")
+        if ai is None or permission is None:
+            return SkillResult(
+                ok=False,
+                output="run_subagent 未绑定父 Agent 上下文（ai/permission）",
+            )
+        try:
+            out = run_subagent(
+                prompt=prompt,
+                ai=ai,
+                skills=skills,
+                permission=permission,
+                bridge=SkillBridge(skills, mcp_manager=self.mcp_manager),
+                description=str(args.get("description") or ""),
+                max_steps=int(args.get("max_steps") or 8),
+                agent_id=str(args.get("agent_id") or "") or None,
+                session_id=str(ctx.get("session_id") or ""),
+                workdir=ctx.get("workdir"),
+                on_progress=on_progress or ctx.get("on_progress"),
+                mcp_manager=ctx.get("mcp_manager") or self.mcp_manager,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.critical(f"run_subagent 失败: {exc}")
+            return SkillResult(ok=False, output=f"run_subagent 失败: {exc}")
+        summary = out.get("summary") or out.get("answer") or ""
+        return SkillResult(
+            ok=bool(out.get("ok")),
+            output=f"[subagent {out.get('agent_id')}] {summary}",
+            data=out,
+        )
+
+    def _emit_post_tool(
+        self, name: str, args: dict[str, Any], result: SkillResult
+    ) -> None:
+        try:
+            from hooks import HookEvent, emit
+
+            event = (
+                HookEvent.POST_TOOL_USE
+                if result.ok
+                else HookEvent.POST_TOOL_USE_FAILURE
+            )
+            emit(
+                event,
+                tool_name=name,
+                payload={
+                    "skill": name,
+                    "arguments": args,
+                    "ok": result.ok,
+                    "output": (result.output or "")[:2000],
+                },
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     def _resolve_ask(
         self,
@@ -234,6 +340,16 @@ class SkillBridge:
             "matched_rule": decision.matched_rule,
             "suggestions": suggestions,
         }
+        try:
+            from hooks import HookEvent, emit
+
+            emit(
+                HookEvent.PERMISSION_REQUEST,
+                tool_name=name,
+                payload=payload,
+            )
+        except Exception:  # noqa: BLE001
+            pass
         handler = getattr(guard, "ask_handler", None)
         if handler is None:
             logger.warning(f"权限需确认但无 ask_handler: {decision.reason}")

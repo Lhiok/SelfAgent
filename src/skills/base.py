@@ -15,7 +15,7 @@ class SkillResult:
 
 
 class Skill(ABC):
-    """单个可被 ReAct 调用的能力。"""
+    """单个可被 Agent 调用的能力。"""
 
     name: str
     description: str

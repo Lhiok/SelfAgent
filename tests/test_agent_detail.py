@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from ai.base import AIClient, AIResponse, ChatOptions
 from permission import PermissionGuard
-from react import (
+from session import (
     DETAIL_FULL,
     DETAIL_OFF,
     DETAIL_SUMMARY,
     ActionCall,
-    ReActAgent,
-    ReActResult,
-    ReActStep,
+    Agent,
+    AgentResult,
+    AgentStep,
     format_result_detail,
     format_step_detail,
     parse_detail_level,
@@ -26,7 +26,7 @@ def test_parse_detail_level_aliases():
 
 
 def test_format_step_levels():
-    step = ReActStep(
+    step = AgentStep(
         index=1,
         thought="先列目录",
         calls=[
@@ -50,35 +50,21 @@ def test_format_step_levels():
 
 
 def test_agent_streams_detail(tmp_path):
-    class _AI(AIClient):
-        provider = "scripted"
-
-        def __init__(self) -> None:
-            self.n = 0
-
-        def chat(self, messages, options: ChatOptions | None = None) -> AIResponse:
-            self.n += 1
-            if self.n == 1:
-                return AIResponse(
-                    content=(
-                        "Thought: 列一下\n"
-                        "Action: local_file\n"
-                        'Action Input: {"action":"list","path":"."}\n'
-                    ),
-                    model="s",
-                    provider=self.provider,
-                )
-            return AIResponse(
-                content="Thought: 好了\nFinal Answer: 只有空目录\n",
-                model="s",
-                provider=self.provider,
-            )
+    from scripted_ai import ScriptedAI, finish, resp, tc
 
     chunks: list[str] = []
     reg = SkillRegistry(permission=PermissionGuard.allow_all())
     reg.register(LocalFileSkill(root=tmp_path, allow_write=False))
-    agent = ReActAgent(
-        ai=_AI(),
+    agent = Agent(
+        ai=ScriptedAI(
+            [
+                resp(
+                    tc("local_file", {"action": "list", "path": "."}, id="list1"),
+                    content="列一下",
+                ),
+                resp(finish("只有空目录"), content="好了"),
+            ]
+        ),
         skills=reg,
         permission=PermissionGuard.allow_all(),
         detail="full",
@@ -95,35 +81,18 @@ def test_agent_streams_detail(tmp_path):
 
 
 def test_agent_progress_even_when_detail_off(tmp_path):
-    class _AI(AIClient):
-        provider = "scripted"
-
-        def __init__(self) -> None:
-            self.n = 0
-
-        def chat(self, messages, options: ChatOptions | None = None) -> AIResponse:
-            self.n += 1
-            if self.n == 1:
-                return AIResponse(
-                    content=(
-                        "Thought: 列一下\n"
-                        "Action: local_file\n"
-                        'Action Input: {"action":"list","path":"."}\n'
-                    ),
-                    model="s",
-                    provider=self.provider,
-                )
-            return AIResponse(
-                content="Thought: 好了\nFinal Answer: ok\n",
-                model="s",
-                provider=self.provider,
-            )
+    from scripted_ai import ScriptedAI, finish, resp, tc
 
     events: list[dict] = []
     reg = SkillRegistry(permission=PermissionGuard.allow_all())
     reg.register(LocalFileSkill(root=tmp_path, allow_write=False))
-    agent = ReActAgent(
-        ai=_AI(),
+    agent = Agent(
+        ai=ScriptedAI(
+            [
+                resp(tc("local_file", {"action": "list", "path": "."}, id="list1")),
+                resp(finish("ok")),
+            ]
+        ),
         skills=reg,
         permission=PermissionGuard.allow_all(),
         detail="off",
@@ -141,19 +110,11 @@ def test_agent_progress_even_when_detail_off(tmp_path):
 
 
 def test_agent_detail_off_silent(tmp_path):
-    class _AI(AIClient):
-        provider = "scripted"
-
-        def chat(self, messages, options: ChatOptions | None = None) -> AIResponse:
-            return AIResponse(
-                content="Thought: x\nFinal Answer: done\n",
-                model="s",
-                provider=self.provider,
-            )
+    from scripted_ai import ScriptedAI, finish, resp
 
     chunks: list[str] = []
-    agent = ReActAgent(
-        ai=_AI(),
+    agent = Agent(
+        ai=ScriptedAI([resp(finish("done"))]),
         skills=SkillRegistry(permission=PermissionGuard.allow_all()),
         permission=PermissionGuard.allow_all(),
         detail="off",
@@ -168,6 +129,7 @@ def test_agent_detail_off_silent(tmp_path):
 def test_agent_detail_persists_to_run_log(tmp_path):
     import config as cfg
     from log import Logger, reset_logger
+    from scripted_ai import ScriptedAI, finish, resp
 
     cfg.set_config(
         {
@@ -180,20 +142,10 @@ def test_agent_detail_persists_to_run_log(tmp_path):
     )
     reset_logger()
 
-    class _AI(AIClient):
-        provider = "scripted"
-
-        def chat(self, messages, options: ChatOptions | None = None) -> AIResponse:
-            return AIResponse(
-                content="Thought: 思考中\nFinal Answer: 完成\n",
-                model="s",
-                provider=self.provider,
-            )
-
     # 触发 from_config 绑定本次运行日志
     Logger.from_config("react")
-    agent = ReActAgent(
-        ai=_AI(),
+    agent = Agent(
+        ai=ScriptedAI([resp(finish("完成"), content="思考中")]),
         skills=SkillRegistry(permission=PermissionGuard.allow_all()),
         permission=PermissionGuard.allow_all(),
         detail="summary",
@@ -207,16 +159,16 @@ def test_agent_detail_persists_to_run_log(tmp_path):
     path = get_run_log_path()
     assert path is not None
     text = path.read_text(encoding="utf-8")
-    assert "ReAct 细节" in text
-    assert "Thought: 思考中" in text
+    assert "Agent 细节" in text
+    assert "思考中" in text
     assert "Final Answer: 完成" in text
 
 
 def test_format_result_and_set_detail():
-    result = ReActResult(
+    result = AgentResult(
         answer="ok",
         steps=[
-            ReActStep(index=1, thought="t", final_answer="ok"),
+            AgentStep(index=1, thought="t", final_answer="ok"),
         ],
         detail_level="summary",
     )
@@ -224,7 +176,7 @@ def test_format_result_and_set_detail():
     assert "第 1 步" in text
     assert "Final Answer: ok" in result.format_detail("summary")
 
-    agent = ReActAgent(
+    agent = Agent(
         skills=SkillRegistry(permission=PermissionGuard.allow_all()),
         permission=PermissionGuard.allow_all(),
         detail="off",

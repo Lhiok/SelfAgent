@@ -50,6 +50,17 @@ def _counts(items: list[dict[str, Any]]) -> dict[str, int]:
     }
 
 
+def _str_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if isinstance(value, list):
+        return [str(x).strip() for x in value if str(x).strip()]
+    return []
+
+
 class TodoTrackerSkill(Skill):
     name = "todo_tracker"
     description = (
@@ -89,6 +100,16 @@ class TodoTrackerSkill(Skill):
                 "default": False,
                 "description": "complete 时若尚未 start，设 true 可强制完成（不推荐）",
             },
+            "blocks": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "本项阻塞的其它 todo id（DAG）",
+            },
+            "blocked_by": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "阻塞本项的其它 todo id（DAG）；亦接受 blockedBy",
+            },
         },
         "required": [],
     }
@@ -127,6 +148,10 @@ class TodoTrackerSkill(Skill):
                 titles.extend(str(x).strip() for x in raw_items if str(x).strip())
             if not titles:
                 return SkillResult(ok=False, output="add 需要 title 或 items")
+            blocks = _str_list(kwargs.get("blocks"))
+            blocked_by = _str_list(
+                kwargs.get("blocked_by") or kwargs.get("blockedBy")
+            )
             for t in titles:
                 items.append(
                     {
@@ -134,6 +159,8 @@ class TodoTrackerSkill(Skill):
                         "title": t,
                         "status": "pending",
                         "note": str(kwargs.get("note") or ""),
+                        "blocks": list(blocks),
+                        "blocked_by": list(blocked_by),
                         "created_at": _now(),
                         "updated_at": _now(),
                     }
@@ -232,6 +259,12 @@ class TodoTrackerSkill(Skill):
                 items[idx]["status"] = st
             if kwargs.get("note") is not None:
                 items[idx]["note"] = str(kwargs.get("note"))
+            if kwargs.get("blocks") is not None:
+                items[idx]["blocks"] = _str_list(kwargs.get("blocks"))
+            if kwargs.get("blocked_by") is not None or kwargs.get("blockedBy") is not None:
+                items[idx]["blocked_by"] = _str_list(
+                    kwargs.get("blocked_by") or kwargs.get("blockedBy")
+                )
             items[idx]["updated_at"] = _now()
             data["items"] = items
             data["updated_at"] = _now()
@@ -285,7 +318,11 @@ class TodoTrackerSkill(Skill):
                 "in_progress": "→",
             }.get(str(it.get("status")), "·")
             note = f" — {it['note']}" if it.get("note") else ""
-            lines.append(f"{mark} [{it.get('id')}] {it.get('title')}{note}")
+            deps = ""
+            bb = it.get("blocked_by") or []
+            if bb:
+                deps = f" ←{','.join(str(x) for x in bb)}"
+            lines.append(f"{mark} [{it.get('id')}] {it.get('title')}{note}{deps}")
         c = _counts(items)
         lines.append(
             f"合计 {c['total']} · 待办 {c['pending']} · 进行中 {c['in_progress']} · 完成 {c['done']}"

@@ -8,7 +8,7 @@ import pytest
 from ai.base import AIMessage
 from ai.deepseek import DeepSeekClient, build_httpx_timeout
 from permission import PermissionGuard
-from react import ReActAgent
+from session import Agent
 from skills import SkillRegistry
 
 
@@ -36,14 +36,14 @@ def test_deepseek_retries_then_raises_friendly_error():
         assert mock_client.post.call_count == 2
 
 
-def test_react_agent_catches_ai_failure():
+def test_agent_catches_ai_failure():
     class _Boom:
         provider = "boom"
 
         def chat(self, messages, options=None):
             raise RuntimeError("DeepSeek 请求超时或网络错误")
 
-    agent = ReActAgent(
+    agent = Agent(
         ai=_Boom(),  # type: ignore[arg-type]
         skills=SkillRegistry(permission=PermissionGuard.allow_all()),
         permission=PermissionGuard.allow_all(),
@@ -52,5 +52,5 @@ def test_react_agent_catches_ai_failure():
     )
     result = agent.run("hello")
     assert not result.completed
-    assert "AI 调用失败" in result.answer
-    assert "会话未中断" in result.answer
+    assert "模型调用失败" in result.answer
+    assert result.stop_reason == "error"

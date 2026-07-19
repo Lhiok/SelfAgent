@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from permission import PermissionGuard
-from react import AgentMode, ReActAgent
+from session import AgentMode, Agent
 from ai.base import AIClient, AIResponse, ChatOptions
 from skills import AskUserSkill, LocalFileSkill, SkillRegistry
 
@@ -56,40 +56,36 @@ def test_ask_user_batch_questions():
 
 
 def test_plan_mode_allows_ask_user():
-    class _AI(AIClient):
-        provider = "scripted"
-
-        def __init__(self) -> None:
-            self.n = 0
-
-        def chat(self, messages, options: ChatOptions | None = None) -> AIResponse:
-            self.n += 1
-            if self.n == 1:
-                return AIResponse(
-                    content=(
-                        "Thought: 先问用户\n"
-                        "Action: ask_user\n"
-                        'Action Input: {"question":"选方案","options":["A","B"],"default":"1"}\n'
-                    ),
-                    model="s",
-                    provider=self.provider,
-                )
-            return AIResponse(
-                content=(
-                    "Thought: 按用户选择出计划\n"
-                    "Plan:\n"
-                    '1. skill=local_file | input={"action":"write","path":"x.txt","content":"A"} | why=按选择写入\n'
-                    "Final Answer: 采用方案 A\n"
-                ),
-                model="s",
-                provider=self.provider,
-            )
+    from scripted_ai import ScriptedAI, resp, submit_plan, tc
 
     reg = SkillRegistry(permission=PermissionGuard.allow_all())
     reg.register(LocalFileSkill(root=".", allow_write=False))
     reg.register(AskUserSkill(ask_handler=lambda q, opts, meta: "1"))
-    agent = ReActAgent(
-        ai=_AI(),
+    agent = Agent(
+        ai=ScriptedAI(
+            [
+                resp(
+                    tc(
+                        "ask_user",
+                        {"question": "选方案", "options": ["A", "B"], "default": "1"},
+                        id="ask1",
+                    )
+                ),
+                resp(
+                    submit_plan(
+                        "采用方案 A",
+                        [
+                            {
+                                "skill": "local_file",
+                                "input": {"action": "write", "path": "x.txt", "content": "A"},
+                                "why": "按选择写入",
+                            }
+                        ],
+                        thought="按用户选择出计划",
+                    )
+                ),
+            ]
+        ),
         skills=reg,
         permission=PermissionGuard.allow_all(),
         mode=AgentMode.PLAN,
@@ -99,5 +95,6 @@ def test_plan_mode_allows_ask_user():
     assert result.completed
     assert result.plan.ok
     obs = "\n".join(c.observation or "" for s in result.steps for c in s.calls)
-    assert '"selected"' in obs
-    assert "A" in obs
+    msgs = "\n".join(m.content or "" for m in result.messages)
+    assert '"selected"' in obs or '"selected"' in msgs
+    assert "A" in obs or "A" in msgs

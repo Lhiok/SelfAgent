@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from ai.base import AIClient, AIResponse, ChatOptions
 from permission import PermissionGuard
-from react import (
+from session import (
     ActionCall,
-    ReActAgent,
-    ReActStep,
+    Agent,
+    AgentStep,
     build_unified_diff,
     collect_changes_from_steps,
     extract_change_from_call,
@@ -73,7 +73,7 @@ def test_local_file_patch_full_file_diff(tmp_path):
 
 def test_collect_changes_from_steps():
     steps = [
-        ReActStep(
+        AgentStep(
             index=1,
             thought="改一下",
             calls=[
@@ -100,10 +100,10 @@ def test_collect_changes_from_steps():
 
 
 def test_merge_same_file_patches():
-    from react import merge_changes_by_path
+    from session import merge_changes_by_path
 
     steps = [
-        ReActStep(
+        AgentStep(
             index=1,
             thought="改两处",
             calls=[
@@ -157,33 +157,24 @@ def test_merge_same_file_patches():
 
 
 def test_agent_progress_includes_file_changes(tmp_path):
-    class _AI(AIClient):
-        provider = "scripted"
-        n = 0
-
-        def chat(self, messages, options: ChatOptions | None = None) -> AIResponse:
-            self.n += 1
-            if self.n == 1:
-                return AIResponse(
-                    content=(
-                        "Thought: 写文件\n"
-                        "Action: local_file\n"
-                        'Action Input: {"action":"write","path":"out.py","content":"ok\\n"}\n'
-                    ),
-                    model="s",
-                    provider=self.provider,
-                )
-            return AIResponse(
-                content="Thought: 完成\nFinal Answer: 已写入\n",
-                model="s",
-                provider=self.provider,
-            )
+    from scripted_ai import ScriptedAI, finish, resp, tc
 
     events: list[dict] = []
     reg = SkillRegistry(permission=PermissionGuard.allow_all())
     reg.register(LocalFileSkill(root=tmp_path, allow_write=True))
-    agent = ReActAgent(
-        ai=_AI(),
+    agent = Agent(
+        ai=ScriptedAI(
+            [
+                resp(
+                    tc(
+                        "local_file",
+                        {"action": "write", "path": "out.py", "content": "ok\n"},
+                        id="w1",
+                    )
+                ),
+                resp(finish("已写入")),
+            ]
+        ),
         skills=reg,
         permission=PermissionGuard.allow_all(),
         detail="off",

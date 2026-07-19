@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from ai.base import AIClient, AIResponse, ChatOptions
 from permission import PermissionGuard
-from react import AgentMode, Conversation, ReActAgent
+from session import AgentMode, Conversation, Agent
+from scripted_ai import finish, resp
 from skills import LocalFileSkill, SkillRegistry
 
 
@@ -15,28 +16,19 @@ class _MultiTurnAI(AIClient):
 
     def chat(self, messages, options: ChatOptions | None = None) -> AIResponse:
         self.calls += 1
-        contents = [m.content for m in messages]
+        contents = [str(m.content or "") for m in messages]
         self.seen_histories.append(contents)
-        # 若历史里已有第一轮答案，说明连续对话生效
         joined = "\n".join(contents)
         if "token-alpha" in joined and self.calls >= 2:
-            return AIResponse(
-                content="Thought: 记得上文\nFinal Answer: recall:token-alpha",
-                model="s",
-                provider=self.provider,
-            )
-        return AIResponse(
-            content="Thought: 首轮\nFinal Answer: token-alpha",
-            model="s",
-            provider=self.provider,
-        )
+            return resp(finish("recall:token-alpha"))
+        return resp(finish("token-alpha"))
 
 
 def test_conversation_multi_turn_keeps_context():
     ai = _MultiTurnAI()
     reg = SkillRegistry(permission=PermissionGuard.allow_all())
     reg.register(LocalFileSkill(root=".", allow_write=False))
-    agent = ReActAgent(
+    agent = Agent(
         ai=ai,
         skills=reg,
         permission=PermissionGuard.allow_all(),
@@ -57,7 +49,7 @@ def test_conversation_multi_turn_keeps_context():
 
 def test_conversation_save_load(tmp_path):
     ai = _MultiTurnAI()
-    agent = ReActAgent(
+    agent = Agent(
         ai=ai,
         skills=SkillRegistry(permission=PermissionGuard.allow_all()),
         permission=PermissionGuard.allow_all(),
@@ -77,7 +69,7 @@ def test_conversation_resume_and_list(tmp_path):
     work = tmp_path / "proj"
     work.mkdir()
     ai = _MultiTurnAI()
-    agent = ReActAgent(
+    agent = Agent(
         ai=ai,
         skills=SkillRegistry(permission=PermissionGuard.allow_all()),
         permission=PermissionGuard.allow_all(),
@@ -98,7 +90,7 @@ def test_conversation_resume_and_list(tmp_path):
     resolved2 = Conversation.resolve_session_path(sid[:8], persist_dir=tmp_path)
     assert resolved2 == path.resolve()
 
-    agent2 = ReActAgent(
+    agent2 = Agent(
         ai=ai,
         skills=SkillRegistry(permission=PermissionGuard.allow_all()),
         permission=PermissionGuard.allow_all(),
@@ -118,7 +110,7 @@ def test_conversation_resume_and_list(tmp_path):
 
 def test_conversation_reset():
     ai = _MultiTurnAI()
-    agent = ReActAgent(
+    agent = Agent(
         ai=ai,
         skills=SkillRegistry(permission=PermissionGuard.allow_all()),
         permission=PermissionGuard.allow_all(),

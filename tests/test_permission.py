@@ -7,7 +7,7 @@ from ai.base import AIClient, AIResponse, ChatOptions
 from permission import PermissionGuard, PermissionMode
 from permission.rules import parse_rule, rule_matches
 from permission.types import PermissionBehavior
-from react import ReActAgent
+from session import Agent
 from skills import LocalFileSkill, SkillRegistry
 
 
@@ -44,25 +44,57 @@ def test_deny_beats_allow():
     assert not guard.check("local_file", arguments={"action": "write"}).allowed
 
 
-def test_ask_returns_ask_behavior():
+def test_ask_rule_blocks_with_suggestions():
     guard = PermissionGuard.from_rules(
-        allow=["local_file(list)", "local_file(read)"],
-        ask=["local_file(write)"],
+        allow=["shell_run(run)"],
+        ask=["shell_run(*)"],
         default_effect="deny",
     )
-    d = guard.check("local_file", arguments={"action": "write", "path": "x"})
+    d = guard.check("shell_run", arguments={"action": "run", "command": "echo"})
     assert not d.allowed
-    assert d.behavior is PermissionBehavior.ASK
+    assert d.behavior.value == "ask"
     assert d.suggestions
 
 
-def test_bypass_mode_allows():
+def test_dont_ask_converts_ask_to_deny():
     guard = PermissionGuard.from_rules(
-        allow=[],
+        ask=["local_file(write)"],
+        mode=PermissionMode.DONT_ASK,
         default_effect="deny",
-        mode=PermissionMode.BYPASS,
     )
-    assert guard.check("shell_run", arguments={"action": "run"}).allowed
+    d = guard.check("local_file", arguments={"action": "write"})
+    assert not d.allowed
+    assert d.behavior.value == "deny"
+
+
+def test_bypass_allows_unless_deny():
+    guard = PermissionGuard.from_rules(
+        deny=["shell_run"],
+        mode=PermissionMode.BYPASS,
+        default_effect="deny",
+    )
+    assert guard.check("local_file", arguments={"action": "write"}).allowed
+    assert not guard.check("shell_run", arguments={"action": "run"}).allowed
+
+
+def test_accept_edits_allows_local_file_write(tmp_path):
+    guard = PermissionGuard.from_rules(
+        mode=PermissionMode.ACCEPT_EDITS,
+        default_effect="deny",
+    )
+    guard.bind_context(workdir=tmp_path)
+    assert guard.check(
+        "local_file",
+        arguments={"action": "write", "path": "a.txt", "content": "x"},
+    ).allowed
+    assert not guard.check("shell_run", arguments={"action": "run"}).allowed
+
+
+def test_grant_session_allows_once():
+    guard = PermissionGuard.from_rules(default_effect="deny")
+    assert not guard.check("local_file", arguments={"action": "write"}).allowed
+    guard.grant_session("local_file(write)")
+    assert guard.check("local_file", arguments={"action": "write"}).allowed
 
 
 def test_plan_mode_blocks_write_allows_read():
@@ -95,32 +127,29 @@ def test_registry_enforces_permission(tmp_path):
     assert "权限拒绝" in blocked.output
 
 
-def test_react_agent_blocks_forbidden_action(tmp_path):
-    class _AI(AIClient):
-        provider = "scripted"
+def test_agent_blocks_forbidden_action(tmp_path):
+    from scripted_ai import ScriptedAI, finish, resp, tc
 
-        def __init__(self) -> None:
-            self.n = 0
-
-        def chat(self, messages, options: ChatOptions | None = None) -> AIResponse:
-            self.n += 1
-            if self.n == 1:
-                content = """Thought: 尝试写入
-Action: local_file
-Action Input: {"action":"write","path":"x.txt","content":"nope"}
-"""
-            else:
-                content = "Thought: 结束\nFinal Answer: done"
-            return AIResponse(content=content, model="s", provider=self.provider)
-
+    ai = ScriptedAI(
+        [
+            resp(
+                tc(
+                    "local_file",
+                    {"action": "write", "path": "x.txt", "content": "nope"},
+                    id="w1",
+                )
+            ),
+            resp(finish("done")),
+        ]
+    )
     guard = PermissionGuard.from_rules(
         allow=["local_file(list)", "local_file(read)"],
         default_effect="deny",
     )
     reg = SkillRegistry()
     reg.register(LocalFileSkill(root=tmp_path, allow_write=True))
-    agent = ReActAgent(
-        ai=_AI(),
+    agent = Agent(
+        ai=ai,
         skills=reg,
         permission=guard,
         max_steps=5,
