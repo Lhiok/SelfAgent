@@ -64,3 +64,13 @@ desktop.ini
 # Packaging / install leftovers
 src/*.egg-info/
 *.pth
+
+# Local agent runtime (memory / plans / workflow runs)
+.selfagent/
+
+# Node / TypeScript desktop（app 产品线产物；main 核心不跟踪）
+node_modules/
+packages/
+packages/*/node_modules/
+packages/*/dist/
+packages/*/dist-electron/
