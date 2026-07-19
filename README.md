@@ -12,7 +12,11 @@ start.bat
 # 或: selfagent-cli
 ```
 
-常用参数：`--workdir` / `--resume` / `--list-sessions`。交互内命令见启动提示（`/plan` `/agent` `/confirm` 等）。
+常用参数：`--workdir` / `--resume` / `--list-sessions` / `--no-stream-delta`。
+
+交互命令：`/plan` `/agent` `/confirm` `/reject` `/detail` `/workdir` `/sessions` `/load` `/save` `/compact` `/status` `/reset` `/quit`。
+
+运行中实时显示 step/skill/流式输出；Ctrl+C 取消本轮；Windows 下可键入中途补充。
 
 配置写在 `config.yaml` 对应节（`ai` / `feishu` / `react` / `skills`）；未填写时可回退环境变量（如 `DEEPSEEK_API_KEY`）。
 

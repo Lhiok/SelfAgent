@@ -1,11 +1,14 @@
-"""SelfAgent CLI：终端连续对话。"""
+"""SelfAgent CLI：终端连续对话（进度 / 取消 / 插话 / 会话管理）。"""
 
 from __future__ import annotations
 
 import argparse
+import sys
+import threading
 from pathlib import Path
 
 import config as cfg
+from cli.progress import ProgressPrinter
 from log import get_run_log_path, reset_logger
 from permission import PermissionGuard
 from react import AgentMode, Conversation, ReActAgent
@@ -37,6 +40,11 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="列出可恢复的历史会话后退出",
     )
+    parser.add_argument(
+        "--no-stream-delta",
+        action="store_true",
+        help="关闭助手流式 delta 打印（仍显示 step/skill 进度）",
+    )
     args = parser.parse_args(argv)
 
     root = Path(__file__).resolve().parents[2]
@@ -49,11 +57,13 @@ def main(argv: list[str] | None = None) -> None:
         _print_sessions(Conversation.list_sessions())
         return
 
+    progress = ProgressPrinter(show_delta=not args.no_stream_delta)
     agent = ReActAgent(
         skills=SkillRegistry.from_config(workdir=args.workdir),
         permission=PermissionGuard.from_config(),
         mode=AgentMode.AGENT,
         workdir=args.workdir,
+        on_progress=progress,
     )
     conv = Conversation(agent)
 
@@ -69,48 +79,67 @@ def main(argv: list[str] | None = None) -> None:
             last = conv.turns[-1]
             print(f"上一轮用户: {last.user[:120]}")
             print(f"上一轮助手: {last.answer[:200]}")
-        if conv.pending_plan and conv.pending_plan.ok:
-            print("--- 待确认计划（可用 /confirm）---")
-            print(conv.pending_plan.format_text())
+        _print_pending_plan(conv)
 
     print(
-        "SelfAgent CLI。命令: /plan /agent /confirm /detail /workdir "
-        "/sessions /load /save /reset /quit"
+        "SelfAgent CLI。命令: /plan /agent /confirm /reject /detail /workdir "
+        "/sessions /load /save /compact /status /reset /quit"
     )
-    print(f"当前细节级别: {agent.detail}（可用 /detail off|summary|full）")
-    print(f"工作目录: {agent.workdir}（可用 /workdir <路径>）")
-    print(f"会话: {conv.session_id[:8]}（自动保存到 {conv.persist_dir}）")
+    print("运行中: Ctrl+C 取消本轮；再按一次退出。可输入文字回车做中途补充（Windows）。")
+    _print_status(conv)
     run_log = get_run_log_path()
     if run_log is not None:
         print(f"本次运行日志: {run_log}")
 
+    interrupt_armed = False
+
     while True:
         try:
             text = input("\n你> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            if conv.turn_count and conv.persist_dir is not None:
-                path = conv.save()
-                print(f"\n会话已保存: {path}")
+            interrupt_armed = False
+        except EOFError:
+            _save_on_exit(conv)
             print("再见")
             break
+        except KeyboardInterrupt:
+            if interrupt_armed:
+                _save_on_exit(conv)
+                print("\n再见")
+                break
+            interrupt_armed = True
+            print("\n（再按 Ctrl+C 退出；或继续输入）")
+            continue
+
         if not text:
             continue
         if text in {"/quit", "/exit", "quit", "exit"}:
-            if conv.turn_count and conv.persist_dir is not None:
-                path = conv.save()
-                print(f"会话已保存: {path}")
+            _save_on_exit(conv)
             break
         if text == "/reset":
             conv.reset()
             print("会话已清空（session_id 不变，继续写入同一文件）")
             continue
+        if text == "/status":
+            _print_status(conv)
+            continue
         if text == "/plan":
             conv.set_mode(AgentMode.PLAN)
-            print("已切换 Plan Mode")
+            print("已切换 Plan Mode（先规划，不写入）")
             continue
         if text == "/agent":
             conv.set_mode(AgentMode.AGENT)
             print("已切换 Agent Mode")
+            continue
+        if text == "/reject":
+            if conv.pending_plan is None:
+                print("没有待确认计划")
+                continue
+            conv.pending_plan = None
+            print("已丢弃待确认计划")
+            continue
+        if text == "/compact":
+            n = conv.compact_now(use_ai=True)
+            print(f"已压缩历史，当前 {n} 条消息")
             continue
         if text == "/detail" or text.startswith("/detail "):
             parts = text.split(maxsplit=1)
@@ -156,9 +185,7 @@ def main(argv: list[str] | None = None) -> None:
                 continue
             print(f"已加载 {conv.session_id[:8]}，共 {conv.turn_count} 轮")
             print(f"工作目录: {conv.agent.workdir}")
-            if conv.pending_plan and conv.pending_plan.ok:
-                print("--- 待确认计划 ---")
-                print(conv.pending_plan.format_text())
+            _print_pending_plan(conv)
             continue
         if text == "/save" or text.startswith("/save "):
             parts = text.split(maxsplit=1)
@@ -170,23 +197,164 @@ def main(argv: list[str] | None = None) -> None:
             print(f"已保存: {path}")
             continue
         if text == "/confirm":
+            if not (conv.pending_plan and conv.pending_plan.ok):
+                print("没有可确认的计划。先 /plan 生成，或查看 /status。")
+                continue
+            print("--- 将执行以下计划 ---")
+            print(conv.pending_plan.format_text())
+            print("执行中…（Ctrl+C 可取消）")
             try:
-                result = conv.confirm_plan()
+                result = _run_turn(conv, kind="confirm", progress=progress)
             except Exception as exc:  # noqa: BLE001
+                progress.close_delta()
                 print(f"助手> 执行计划失败: {exc}")
                 continue
+            progress.close_delta()
             _print_result(result, streamed=conv.agent.stream_detail)
             continue
 
+        print(_status_line(conv) + "  执行中…")
         try:
-            result = conv.chat(text)
+            result = _run_turn(conv, user_text=text, progress=progress)
         except Exception as exc:  # noqa: BLE001
+            progress.close_delta()
             print(f"助手> 本轮失败（会话仍可继续）: {exc}")
             continue
+        progress.close_delta()
+        if result is not None and result.stop_reason == "enqueued":
+            print(f"助手> {result.answer}")
+            continue
         _print_result(result, streamed=conv.agent.stream_detail)
-        if result.plan and result.plan.ok:
-            print("--- 待确认计划 ---")
+        if result is not None and result.plan and result.plan.ok:
+            print("--- 待确认计划（/confirm 执行，/reject 丢弃）---")
             print(result.plan.format_text())
+
+
+def _run_turn(
+    conv: Conversation,
+    *,
+    user_text: str | None = None,
+    kind: str = "chat",
+    progress: ProgressPrinter,
+):
+    """后台执行 turn；主线程轮询取消与（Windows）中途补充。"""
+    result_box: dict = {}
+    error_box: dict = {}
+    done = threading.Event()
+
+    def worker() -> None:
+        try:
+            if kind == "confirm":
+                result_box["result"] = conv.confirm_plan()
+            else:
+                result_box["result"] = conv.chat(user_text or "")
+        except Exception as exc:  # noqa: BLE001
+            error_box["exc"] = exc
+        finally:
+            done.set()
+
+    t = threading.Thread(target=worker, name="selfagent-turn", daemon=True)
+    t.start()
+    print("  （Ctrl+C 取消；Windows 下可键入补充后回车）", flush=True)
+
+    try:
+        while not done.is_set():
+            for line in _poll_stdin_lines():
+                text = line.strip()
+                if not text:
+                    continue
+                if text in {"/cancel", "/stop"}:
+                    conv.cancel()
+                    print("  ! 已请求取消…", flush=True)
+                else:
+                    conv.enqueue(text)
+                    print(f"  + 已排队补充: {text[:80]}", flush=True)
+            # 兼容非 Windows：无 kbhit 时仅等待
+            done.wait(0.15)
+    except KeyboardInterrupt:
+        conv.cancel()
+        print("\n  ! Ctrl+C：已请求取消本轮…", flush=True)
+        done.wait(timeout=120)
+
+    t.join(timeout=120)
+    progress.close_delta()
+
+    if "exc" in error_box:
+        raise error_box["exc"]
+    return result_box.get("result")
+
+
+def _poll_stdin_lines() -> list[str]:
+    """非阻塞读取完整行；Windows 用 msvcrt，其它平台暂不抢占 stdin。"""
+    if sys.platform != "win32":
+        return []
+    try:
+        import msvcrt
+    except ImportError:
+        return []
+
+    lines: list[str] = []
+    # 模块级缓冲
+    buf = getattr(_poll_stdin_lines, "_buf", "")
+    while msvcrt.kbhit():
+        ch = msvcrt.getwch()
+        if ch in ("\x00", "\xe0"):
+            # 功能键前缀，丢弃后续
+            if msvcrt.kbhit():
+                msvcrt.getwch()
+            continue
+        if ch == "\x03":
+            raise KeyboardInterrupt
+        if ch in ("\r", "\n"):
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            lines.append(buf)
+            buf = ""
+            continue
+        if ch in ("\b", "\x08"):
+            if buf:
+                buf = buf[:-1]
+                sys.stdout.write("\b \b")
+                sys.stdout.flush()
+            continue
+        buf += ch
+        sys.stdout.write(ch)
+        sys.stdout.flush()
+    _poll_stdin_lines._buf = buf  # type: ignore[attr-defined]
+    return lines
+
+
+def _save_on_exit(conv: Conversation) -> None:
+    if conv.turn_count and conv.persist_dir is not None:
+        try:
+            path = conv.save()
+            print(f"\n会话已保存: {path}")
+        except OSError as exc:
+            print(f"\n保存失败: {exc}")
+
+
+def _status_line(conv: Conversation) -> str:
+    agent = conv.agent
+    return (
+        f"[{agent.mode.value} | steps≤{agent.max_steps} | "
+        f"detail={agent.detail} | session={conv.session_id[:8]} | "
+        f"workdir={agent.workdir}]"
+    )
+
+
+def _print_status(conv: Conversation) -> None:
+    print(_status_line(conv))
+    print(f"轮次: {conv.turn_count}  历史消息: {len(conv.messages)}")
+    if conv.pending_plan and conv.pending_plan.ok:
+        print("待确认计划: 是（/confirm 或 /reject）")
+    else:
+        print("待确认计划: 否")
+
+
+def _print_pending_plan(conv: Conversation) -> None:
+    if conv.pending_plan and conv.pending_plan.ok:
+        print("--- 待确认计划（/confirm 执行，/reject 丢弃）---")
+        print(conv.pending_plan.format_text())
 
 
 def _print_sessions(items: list) -> None:
@@ -194,20 +362,28 @@ def _print_sessions(items: list) -> None:
         print("（没有历史会话）")
         return
     print(f"共 {len(items)} 条历史会话：")
+    print(f"{'#':>3}  {'id':<10}  {'turns':>5}  {'updated':<20}  preview")
+    print("-" * 72)
     for i, item in enumerate(items, start=1):
         sid = str(item["session_id"])[:8]
+        preview = (item.get("preview") or "(空)").replace("\n", " ")
+        if len(preview) > 36:
+            preview = preview[:35] + "…"
         print(
-            f"  {i}. {sid}  turns={item['turn_count']}  "
-            f"{item['updated_at']}\n"
-            f"     preview: {item['preview'] or '(空)'}\n"
-            f"     path: {item['path']}"
+            f"{i:>3}  {sid:<10}  {item['turn_count']:>5}  "
+            f"{str(item.get('updated_at') or ''):<20}  {preview}"
         )
+        print(f"     path: {item['path']}")
 
 
 def _print_result(result, *, streamed: bool) -> None:
+    if result is None:
+        print("助手> （无结果）")
+        return
     if result.detail_text and not streamed:
         print(result.detail_text)
-    print(f"助手> {result.answer}")
+    suffix = f"  ({result.stop_reason})" if result.stop_reason else ""
+    print(f"助手> {result.answer}{suffix}")
 
 
 if __name__ == "__main__":
