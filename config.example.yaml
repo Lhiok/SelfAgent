@@ -2,7 +2,7 @@
 # 各模块配置写在对应节下，便于维护；系统/用户环境变量仍可作为缺省回退
 
 log:
-  # 默认最低输出等级：notice | warning | critical
+  # 默认最低输出等级：verbose | debug | notice | warning | critical
   level: notice
   # 启用的输出模式：console | file | server
   modes:
@@ -14,6 +14,13 @@ log:
   server:
     url: ""
     timeout: 5.0
+  # 调试通道（对齐 Claude Code：会话文件 + 分类过滤）
+  # 也可用环境变量：SELFAGENT_DEBUG=1、SELFAGENT_DEBUG_FILTER=api,skills、SELFAGENT_DEBUG_LOG_LEVEL=verbose
+  debug:
+    enabled: false
+    # filter: "react,skills,!feishu"
+    # dir: logs/debug
+    # session_id: ""
 
 ai:
   default_provider: deepseek
@@ -41,7 +48,7 @@ react:
   step_extend_options: [6, 12, 24]
   # 可选：Agent 工作目录（local_file / search_code / shell_run / git_ops 的 root）
   # workdir: "."
-  # 过程细节：off（仅最终答案）| summary（Thought+Action）| full（含 Input/Observation）
+  # 过程细节：off（仅最终答案）| summary（工具步骤摘要）| full（含 Input/Observation）
   detail: off
   # detail != off 时是否在每轮执行中实时打印
   stream_detail: true
@@ -50,11 +57,7 @@ react:
   conversation:
     # 连续对话保留的最大消息条数（不含 system）
     max_history_messages: 40
-    # 超过该条数时压缩较早上下文（0=禁用摘要压缩，仍受 max_history 硬裁剪）
-    compact_after_messages: 32
-    # 压缩时保留的最近消息条数
-    compact_keep_recent: 12
-    # 热路径是否用 AI 做摘要（默认 false，避免回合结束后同步摘要挡住 UI done）
+    # compact_use_ai：是否用 AI 做摘要压缩
     compact_use_ai: false
     # 是否在后续轮次注入“连续对话”提示
     inject_hint: true
@@ -88,17 +91,14 @@ react:
       - web_fetch
       - diff_review
       - todo_tracker
+  # 同一步内可并行的只读工具上限
+  max_tool_concurrency: 4
   system_prompt: |
-    你是一个可调用工具的助手。请严格使用 ReAct 格式回复：
-    Thought: 思考下一步
-    Action: 工具名
-    Action Input: 工具参数（JSON）
-    或在完成时输出：
-    Thought: 已得到答案
-    Final Answer: 最终结果
-
-    可以在同一次回复中连续输出多个 Action / Action Input（按顺序执行）。
-    工具之间互不依赖时可一次规划多个调用；需要上一步结果时再分步调用。
+    你是可调用工具的助手。请通过 function/tool 调用完成任务。
+    任务完成时必须调用 finish，参数 {"answer":"最终答复"}。
+    可在一轮中发起多个互不依赖的工具调用。
+    ask_user 可连续调用暂存问题；finish / submit_plan / 其它工具前会一并询问用户。
+    Plan Mode 下调研后调用 submit_plan 提交步骤。
 
 skills:
   # 工具 Observation 进入模型前的统一截断（0 或不写 max_bytes 表示不按字节截断）
@@ -172,77 +172,140 @@ skills:
     output_dir: logs/browser
 
 permission:
-  # 是否启用权限控制（对 ReAct 调用 Skill 限权）
+  # 是否启用权限控制
   enabled: true
+  # 模式：default | accept_edits | plan | bypass | dont_ask
+  mode: default
   # 未命中规则时的默认策略：deny | allow
   default_effect: deny
-  # 当前生效角色
-  role: editor
-  roles:
-    readonly:
-      skills:
-        local_file:
-          actions: [list, read]
-        search_code:
-          actions: [search]
-        git_ops:
-          actions: [status, diff, log, branch, show]
-        web_fetch:
-          actions: [fetch]
-        diff_review:
-          actions: [review]
-        todo_tracker:
-          actions: [list, start]
-        screenshot:
-          actions: [read]
-        nodejs:
-          actions: [version]
-        python:
-          actions: [version, compile]
-        csharp:
-          actions: [version]
-        ask_user: true
-        request_capability: true
-        feishu_notify:
-          actions: [text, markdown]
-    editor:
-      skills:
-        local_file:
-          actions: [list, read, write, patch, move]
-        search_code:
-          actions: [search]
-        git_ops:
-          actions: [status, diff, log, branch, show, add, commit]
-        ask_user: true
-        request_capability: true
-        shell_run:
-          actions: [run]
-        feishu_notify:
-          actions: [text, markdown]
-        dotnet_build:
-          actions: [build, test, restore]
-        nodejs:
-          actions: [install, test, build, script, run, version]
-        python:
-          actions: [run, test, install, module, compile, version]
-        csharp:
-          actions: [restore, build, test, run, format, version]
-        web_fetch:
-          actions: [fetch]
-        http_request:
-          actions: [request, get, post, put, patch, delete]
-        diff_review:
-          actions: [review]
-        todo_tracker:
-          actions: [list, add, start, complete, remove, clear, update]
-        screenshot:
-          actions: [capture, read]
-        browser:
-          actions: [goto, content, screenshot, click, fill, evaluate]
-    admin:
-      skills:
-        "*":
-          actions: "*"
+  # 规则语法：Skill / Skill(action) / Skill(prefix:*) / Skill(*)
+  # 判定顺序：deny → ask → plan/mode → allow/session → default_effect
+  rules:
+    allow:
+      - "local_file(list)"
+      - "local_file(read)"
+      - "local_file(write)"
+      - "local_file(patch)"
+      - "local_file(move)"
+      - "search_code(search)"
+      - "git_ops(status)"
+      - "git_ops(diff)"
+      - "git_ops(log)"
+      - "git_ops(branch)"
+      - "git_ops(show)"
+      - "git_ops(add)"
+      - "git_ops(commit)"
+      - "ask_user"
+      - "request_capability"
+      - "shell_run(run)"
+      - "feishu_notify(text)"
+      - "feishu_notify(markdown)"
+      - "dotnet_build(build)"
+      - "dotnet_build(test)"
+      - "dotnet_build(restore)"
+      - "nodejs(install)"
+      - "nodejs(test)"
+      - "nodejs(build)"
+      - "nodejs(script)"
+      - "nodejs(run)"
+      - "nodejs(version)"
+      - "python(run)"
+      - "python(test)"
+      - "python(install)"
+      - "python(module)"
+      - "python(compile)"
+      - "python(version)"
+      - "csharp(restore)"
+      - "csharp(build)"
+      - "csharp(test)"
+      - "csharp(run)"
+      - "csharp(format)"
+      - "csharp(version)"
+      - "web_fetch(fetch)"
+      - "http_request(request)"
+      - "http_request(get)"
+      - "http_request(post)"
+      - "http_request(put)"
+      - "http_request(patch)"
+      - "http_request(delete)"
+      - "diff_review(review)"
+      - "todo_tracker(list)"
+      - "todo_tracker(add)"
+      - "todo_tracker(start)"
+      - "todo_tracker(complete)"
+      - "todo_tracker(remove)"
+      - "todo_tracker(clear)"
+      - "todo_tracker(update)"
+      - "memory_ops(list)"
+      - "memory_ops(read)"
+      - "memory_ops(save)"
+      - "memory_ops(search)"
+      - "screenshot(capture)"
+      - "screenshot(read)"
+      - "browser(goto)"
+      - "browser(content)"
+      - "browser(screenshot)"
+      - "browser(click)"
+      - "browser(fill)"
+      - "browser(evaluate)"
+      - "run_subagent"
+      - "mcp__*"
+    deny: []
+    ask: []
+
+memory:
+  # 文件型持久记忆（MEMORY.md + topic）；与会话 transcript 分离
+  enabled: true
+  dir: .selfagent/memory
+  extract_enabled: true
+  extract_min_user_chars: 20
+  max_index_lines: 200
+  max_index_bytes: 25600
+  prefetch_top_k: 5
+  session_notes_enabled: true
+  compact_after_messages: 32
+  compact_keep_recent: 12
+
+plan:
+  # Plan Mode 生命周期（enter → submit_plan → confirm/reject）
+  enabled: true
+  plans_dir: .selfagent/plans
+  clear_context_on_confirm: false
+  auto_restore_mode: true
+  # 只读表仍见 react.plan.readonly_actions / allow_skills
+
+workflow:
+  # 编排层（队列 / YAML / Plan 落盘 / 任务 DAG）；推理仍在 agent/
+  enabled: true
+  max_workers: 2
+  workflows_dir: .selfagent/workflows
+  plans_dir: .selfagent/plans
+  tasks_dir: .selfagent/tasks
+  # 默认可关，避免意外定时触发
+  cron_enabled: false
+  queue_drain_per_turn: 4
+
+mcp:
+  # 外部 MCP 工具池（stdio）；工具名形如 mcp__{server}__{tool}
+  servers: {}
+  # 示例：
+  # servers:
+  #   echo:
+  #     transport: stdio
+  #     command: python
+  #     args: ["-m", "tests.fixtures.mcp_echo_server"]
+  #     enabled: true
+
+hooks:
+  # 完整事件见 hooks.HookEvent；command exit 2 = block
+  # 也可写 .selfagent/hooks.yaml
+  # PreToolUse:
+  #   - matcher: local_file
+  #     runner: command
+  #     command: 'python -c "import sys; sys.exit(2)"'
+  # Stop:
+  #   - runner: command
+  #     command: 'echo stopped'
 
 regression:
   # 是否默认跑需要真实密钥的在线用例（DeepSeek / 飞书）

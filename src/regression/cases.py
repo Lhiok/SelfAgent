@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Callable
@@ -14,8 +15,7 @@ from env import EnvLayer, get_env
 from feishu import FeishuBot
 from log import LogLevel, Logger
 from permission import PermissionGuard
-from react import AgentMode, Conversation, Plan, PlanStep, ReActAgent, parse_plan
-from react.parser import parse_react_output
+from session import AgentMode, Conversation, Plan, PlanStep, Agent
 from skills import (
     AskUserSkill,
     FeishuNotifySkill,
@@ -26,6 +26,11 @@ from skills import (
     ShellRunSkill,
     SkillRegistry,
 )
+
+_TESTS_DIR = Path(__file__).resolve().parents[2] / "tests"
+if str(_TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_TESTS_DIR))
+from scripted_ai import ScriptedAI, finish, resp, submit_plan, tc  # noqa: E402
 
 CaseFn = Callable[[], None]
 
@@ -231,14 +236,27 @@ def case_skill_git_ops_readonly() -> None:
             ["git", "config", "user.email", "reg@example.com"],
             ["git", "config", "user.name", "Reg"],
         ):
-            subprocess.run(args, cwd=str(repo), check=True, capture_output=True)
+            subprocess.run(
+                args,
+                cwd=str(repo),
+                check=True,
+                capture_output=True,
+                stdin=subprocess.DEVNULL,
+            )
         (repo / "f.txt").write_text("x\n", encoding="utf-8")
-        subprocess.run(["git", "add", "f.txt"], cwd=str(repo), check=True, capture_output=True)
+        subprocess.run(
+            ["git", "add", "f.txt"],
+            cwd=str(repo),
+            check=True,
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+        )
         subprocess.run(
             ["git", "commit", "-m", "init"],
             cwd=str(repo),
             check=True,
             capture_output=True,
+            stdin=subprocess.DEVNULL,
         )
         skill = GitOpsSkill(root=repo, allow_write=False)
         status = skill.run(action="status")
@@ -271,31 +289,7 @@ def case_permission_readonly_blocks_write() -> None:
         _assert(not blocked.ok and "权限拒绝" in blocked.output, blocked.output)
 
 
-def case_permission_react_enforcement() -> None:
-    class _AI(AIClient):
-        provider = "scripted"
-
-        def __init__(self) -> None:
-            self.n = 0
-
-        def chat(self, messages, options: ChatOptions | None = None) -> AIResponse:
-            self.n += 1
-            if self.n == 1:
-                return AIResponse(
-                    content=(
-                        "Thought: write\n"
-                        "Action: local_file\n"
-                        'Action Input: {"action":"write","path":"z.txt","content":"x"}\n'
-                    ),
-                    model="s",
-                    provider=self.provider,
-                )
-            return AIResponse(
-                content="Thought: done\nFinal Answer: ok",
-                model="s",
-                provider=self.provider,
-            )
-
+def case_permission_agent_enforcement() -> None:
     guard = PermissionGuard.from_rules(
         allow=["local_file(list)", "local_file(read)"],
         default_effect="deny",
@@ -304,8 +298,19 @@ def case_permission_react_enforcement() -> None:
         root = Path(tmp)
         reg = SkillRegistry()
         reg.register(LocalFileSkill(root=root, allow_write=True))
-        agent = ReActAgent(
-            ai=_AI(),
+        agent = Agent(
+            ai=ScriptedAI(
+                [
+                    resp(
+                        tc(
+                            "local_file",
+                            {"action": "write", "path": "z.txt", "content": "x"},
+                            id="w1",
+                        )
+                    ),
+                    resp(finish("ok")),
+                ]
+            ),
             skills=reg,
             permission=guard,
             max_steps=4,
@@ -320,48 +325,25 @@ def case_permission_react_enforcement() -> None:
         )
 
 
-# ---------- react parser / agent ----------
-
-def case_react_parse_multi_action() -> None:
-    text = """Thought: 多工具
-Action: local_file
-Action Input: {"action":"list","path":"."}
-Action: local_file
-Action Input: {"action":"read","path":"a.txt"}
-"""
-    parsed = parse_react_output(text)
-    _assert(len(parsed.actions) == 2, f"应解析 2 个 Action，实际 {len(parsed.actions)}")
-    _assert(parsed.final_answer is None, "不应有 Final Answer")
-
+# ---------- agent (tool_calls) ----------
 
 def case_react_agent_multi_action() -> None:
-    class _ScriptedAI(AIClient):
-        provider = "scripted"
-
-        def __init__(self) -> None:
-            self._n = 0
-
-        def chat(self, messages, options: ChatOptions | None = None) -> AIResponse:
-            self._n += 1
-            if self._n == 1:
-                content = """Thought: 读两个文件
-Action: local_file
-Action Input: {"action":"read","path":"x.txt"}
-Action: local_file
-Action Input: {"action":"read","path":"y.txt"}
-"""
-            else:
-                content = "Thought: 完成\nFinal Answer: ok-reg"
-            return AIResponse(content=content, model="scripted", provider=self.provider)
-
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         (root / "x.txt").write_text("X", encoding="utf-8")
         (root / "y.txt").write_text("Y", encoding="utf-8")
         registry = SkillRegistry()
         registry.register(LocalFileSkill(root=root, allow_write=False))
-        agent = ReActAgent(
-            ai=_ScriptedAI(),
+        agent = Agent(
+            ai=ScriptedAI(
+                [
+                    resp(
+                        tc("local_file", {"action": "read", "path": "x.txt"}, id="x"),
+                        tc("local_file", {"action": "read", "path": "y.txt"}, id="y"),
+                    ),
+                    resp(finish("ok-reg")),
+                ]
+            ),
             skills=registry,
             permission=PermissionGuard.allow_all(),
             max_steps=5,
@@ -374,40 +356,37 @@ Action Input: {"action":"read","path":"y.txt"}
 
 
 def case_plan_mode_parse_and_block_write() -> None:
-    text = """Thought: 规划
-Plan:
-1. skill=local_file | input={"action":"write","path":"p.txt","content":"x"} | why=写入
-Final Answer: 计划完成
-"""
-    plan = parse_plan(text, final_answer="计划完成")
-    _assert(plan.ok and len(plan.steps) == 1, "应解析到 1 个计划步骤")
-
-    class _AI(AIClient):
-        provider = "scripted"
-
-        def __init__(self) -> None:
-            self.n = 0
-
-        def chat(self, messages, options: ChatOptions | None = None) -> AIResponse:
-            self.n += 1
-            if self.n == 1:
-                return AIResponse(
-                    content=(
-                        "Thought: 写入\n"
-                        "Action: local_file\n"
-                        'Action Input: {"action":"write","path":"p.txt","content":"x"}\n'
-                    ),
-                    model="s",
-                    provider=self.provider,
+    ai = ScriptedAI(
+        [
+            resp(
+                tc(
+                    "local_file",
+                    {"action": "write", "path": "p.txt", "content": "x"},
+                    id="w1",
                 )
-            return AIResponse(content=text, model="s", provider=self.provider)
+            ),
+            resp(
+                submit_plan(
+                    "计划完成",
+                    [
+                        {
+                            "skill": "local_file",
+                            "input": {"action": "write", "path": "p.txt", "content": "x"},
+                            "why": "写入",
+                        }
+                    ],
+                    thought="规划",
+                )
+            ),
+        ]
+    )
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         reg = SkillRegistry()
         reg.register(LocalFileSkill(root=root, allow_write=True))
-        agent = ReActAgent(
-            ai=_AI(),
+        agent = Agent(
+            ai=ai,
             skills=reg,
             permission=PermissionGuard.allow_all(),
             mode=AgentMode.PLAN,
@@ -417,8 +396,8 @@ Final Answer: 计划完成
         _assert(result.completed and result.plan.ok, "Plan Mode 应产出计划")
         _assert(not (root / "p.txt").exists(), "Plan Mode 不应真正写入")
 
-        exec_agent = ReActAgent(
-            ai=_AI(),
+        exec_agent = Agent(
+            ai=ai,
             skills=reg,
             permission=PermissionGuard.allow_all(),
             mode=AgentMode.AGENT,
@@ -457,18 +436,10 @@ def case_conversation_multi_turn() -> None:
             self.n += 1
             blob = "\n".join(m.content for m in messages)
             if "secret-42" in blob and self.n >= 2:
-                return AIResponse(
-                    content="Final Answer: got-secret-42",
-                    model="s",
-                    provider=self.provider,
-                )
-            return AIResponse(
-                content="Final Answer: secret-42",
-                model="s",
-                provider=self.provider,
-            )
+                return resp(finish("got-secret-42"))
+            return resp(finish("secret-42"))
 
-    agent = ReActAgent(
+    agent = Agent(
         ai=_AI(),
         skills=SkillRegistry(),
         permission=PermissionGuard.allow_all(),
@@ -554,11 +525,10 @@ def build_cases(*, include_live: bool = False) -> list[tuple[str, str, CaseFn]]:
         ("skills", "feishu_notify 缺配置", case_skill_feishu_notify_missing_webhook),
         ("skills", "git_ops 只读", case_skill_git_ops_readonly),
         ("permission", "只读角色拦截写入", case_permission_readonly_blocks_write),
-        ("permission", "ReAct 权限执行拦截", case_permission_react_enforcement),
-        ("react", "多 Action 解析", case_react_parse_multi_action),
-        ("react", "多 Action 智能体执行", case_react_agent_multi_action),
-        ("react", "Plan Mode 规划与执行", case_plan_mode_parse_and_block_write),
-        ("react", "连续对话多轮上下文", case_conversation_multi_turn),
+        ("permission", "权限执行拦截", case_permission_agent_enforcement),
+        ("agent", "多 Action 智能体执行", case_react_agent_multi_action),
+        ("agent", "Plan Mode 规划与执行", case_plan_mode_parse_and_block_write),
+        ("agent", "连续对话多轮上下文", case_conversation_multi_turn),
         ("ai", "未知提供商报错", case_ai_factory_unknown_provider),
         ("feishu", "未配置 webhook 失败", case_feishu_missing_webhook),
     ]
