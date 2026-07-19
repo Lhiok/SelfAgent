@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Literal
+from typing import Any, Iterable, Iterator, Literal
 
 Role = Literal["system", "user", "assistant", "tool"]
 
@@ -33,6 +33,14 @@ class AIResponse:
     usage: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class StreamEvent:
+    """流式增量事件；text 为本次 delta。"""
+
+    text: str
+    done: bool = False
+
+
 class AIClient(ABC):
     provider: str
 
@@ -43,6 +51,17 @@ class AIClient(ABC):
         options: ChatOptions | None = None,
     ) -> AIResponse:
         raise NotImplementedError
+
+    def chat_stream(
+        self,
+        messages: Iterable[AIMessage],
+        options: ChatOptions | None = None,
+    ) -> Iterator[str | StreamEvent]:
+        """默认实现：一次性 chat 后 yield 全文（子类可覆盖为真流式）。"""
+        response = self.chat(messages, options)
+        content = response.content or ""
+        if content:
+            yield StreamEvent(text=content, done=True)
 
     def ask(self, prompt: str, *, system: str | None = None, **kwargs: Any) -> str:
         messages: list[AIMessage] = []

@@ -1,4 +1,4 @@
-﻿from ai.base import AIClient, AIMessage, AIResponse, ChatOptions
+﻿from ai.base import AIClient, AIMessage, AIResponse, ChatOptions, StreamEvent
 from ai.factory import create_ai_client
 
 __all__ = [
@@ -6,5 +6,7 @@ __all__ = [
     "AIMessage",
     "AIResponse",
     "ChatOptions",
+    "StreamEvent",
     "create_ai_client",
 ]
+

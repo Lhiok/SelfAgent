@@ -5,6 +5,8 @@ from react.changes import (
     extract_change_from_call,
     merge_changes_by_path,
 )
+from react.compaction import compact_messages, hard_trim
+from react.control import RunControl
 from react.conversation import (
     DEFAULT_PERSIST_DIR,
     Conversation,
@@ -20,9 +22,11 @@ from react.detail import (
     format_step_detail,
     parse_detail_level,
 )
+from react.doom_loop import DoomLoopTracker, DoomVerdict
 from react.mode import AgentMode
 from react.parser import ParsedAction, ParsedReAct, parse_react_output
 from react.plan import Plan, PlanStep, parse_plan
+from react.types import DetailHandler, ProgressHandler
 
 __all__ = [
     "ActionCall",
@@ -34,18 +38,25 @@ __all__ = [
     "DETAIL_LEVELS",
     "DETAIL_OFF",
     "DETAIL_SUMMARY",
+    "DetailHandler",
+    "DoomLoopTracker",
+    "DoomVerdict",
     "ParsedAction",
     "ParsedReAct",
     "Plan",
     "PlanResult",
     "PlanStep",
+    "ProgressHandler",
     "ReActAgent",
     "ReActResult",
     "ReActStep",
+    "RunControl",
     "TurnRecord",
     "build_unified_diff",
     "collect_changes_from_steps",
+    "compact_messages",
     "extract_change_from_call",
+    "hard_trim",
     "merge_changes_by_path",
     "format_result_detail",
     "format_step_detail",
