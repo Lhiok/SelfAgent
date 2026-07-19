@@ -134,9 +134,29 @@ class SkillBridge:
 
         assert args is not None
         if enforce_permission and guard is not None:
-            decision = guard.assert_allowed(name, arguments=args)
-            if not decision.allowed:
-                return SkillResult(ok=False, output=f"权限拒绝: {decision.reason}")
+            from permission.types import PermissionBehavior
+
+            decision = guard.check(name, arguments=args)
+            if decision.behavior is PermissionBehavior.ASK:
+                allowed = self._resolve_ask(guard, name, args, decision, on_progress)
+                if not allowed:
+                    tip = ""
+                    if decision.suggestions:
+                        rules = ", ".join(s.rule_raw for s in decision.suggestions)
+                        tip = f"；可会话放行: grant_session({rules!r})"
+                    return SkillResult(
+                        ok=False,
+                        output=f"权限拒绝: {decision.reason}{tip}",
+                    )
+            elif not decision.allowed:
+                tip = ""
+                if getattr(decision, "suggestions", None):
+                    rules = ", ".join(s.rule_raw for s in decision.suggestions)
+                    tip = f"；会话放行: grant_session({rules!r})" if rules else ""
+                logger.warning(f"权限拒绝: {decision.reason}{tip}")
+                return SkillResult(
+                    ok=False, output=f"权限拒绝: {decision.reason}{tip}"
+                )
 
         skill = self.registry.get(name)
         if skill is None:
@@ -192,3 +212,55 @@ class SkillBridge:
                 logger.warning(f"skill progress 回调失败: {exc}")
 
         return result
+
+    def _resolve_ask(
+        self,
+        guard: PermissionGuard,
+        name: str,
+        args: dict[str, Any],
+        decision: Any,
+        on_progress: ProgressHandler | None,
+    ) -> bool:
+        """命中 ask：有 handler 则交互；否则 headless 拒绝。放行时写入 session grant。"""
+        suggestions = [
+            s.to_dict() if hasattr(s, "to_dict") else {"rule": getattr(s, "rule_raw", "")}
+            for s in (decision.suggestions or [])
+        ]
+        payload = {
+            "type": "permission_ask",
+            "skill": name,
+            "arguments": args,
+            "reason": decision.reason,
+            "matched_rule": decision.matched_rule,
+            "suggestions": suggestions,
+        }
+        handler = getattr(guard, "ask_handler", None)
+        if handler is None:
+            logger.warning(f"权限需确认但无 ask_handler: {decision.reason}")
+            return False
+        if on_progress is not None:
+            try:
+                on_progress(
+                    {
+                        "type": "status",
+                        "phase": "permission_ask",
+                        "message": f"等待授权: {name}",
+                    }
+                )
+                on_progress(payload)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"permission_ask progress 失败: {exc}")
+        try:
+            allowed = bool(handler(payload))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"permission ask_handler 失败: {exc}")
+            return False
+        if allowed:
+            for sug in decision.suggestions or []:
+                raw = getattr(sug, "rule_raw", None) or ""
+                if raw:
+                    try:
+                        guard.grant_session(raw)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(f"grant_session 失败: {exc}")
+        return allowed

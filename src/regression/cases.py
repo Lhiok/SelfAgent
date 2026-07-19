@@ -14,7 +14,6 @@ from env import EnvLayer, get_env
 from feishu import FeishuBot
 from log import LogLevel, Logger
 from permission import PermissionGuard
-from permission.guard import RolePolicy, SkillRule
 from react import AgentMode, Conversation, Plan, PlanStep, ReActAgent, parse_plan
 from react.parser import parse_react_output
 from skills import (
@@ -251,16 +250,9 @@ def case_skill_git_ops_readonly() -> None:
 # ---------- permission ----------
 
 def case_permission_readonly_blocks_write() -> None:
-    guard = PermissionGuard(
-        enabled=True,
-        role="readonly",
+    guard = PermissionGuard.from_rules(
+        allow=["local_file(list)", "local_file(read)"],
         default_effect="deny",
-        roles={
-            "readonly": RolePolicy(
-                name="readonly",
-                skills={"local_file": SkillRule(allow=True, actions={"list", "read"})},
-            )
-        },
     )
     _assert(
         guard.check("local_file", arguments={"action": "read", "path": "a"}).allowed,
@@ -304,16 +296,9 @@ def case_permission_react_enforcement() -> None:
                 provider=self.provider,
             )
 
-    guard = PermissionGuard(
-        enabled=True,
-        role="readonly",
+    guard = PermissionGuard.from_rules(
+        allow=["local_file(list)", "local_file(read)"],
         default_effect="deny",
-        roles={
-            "readonly": RolePolicy(
-                name="readonly",
-                skills={"local_file": SkillRule(allow=True, actions={"list", "read"})},
-            )
-        },
     )
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
