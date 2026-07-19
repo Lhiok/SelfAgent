@@ -14,6 +14,10 @@ start.bat
 
 常用参数：`--workdir` / `--resume` / `--list-sessions`。交互内命令见启动提示（`/plan` `/agent` `/confirm` 等）。
 
+配置写在 `config.yaml` 对应节（`ai` / `feishu` / `react` / `skills`）；未填写时可回退环境变量（如 `DEEPSEEK_API_KEY`）。
+
+其它端：`main`（核心）、`web`（浏览器）、`app`（桌面）。
+
 ---
 
 ## 快速使用
@@ -172,6 +176,14 @@ python examples/chat_session.py --resume 2723e299
 ```
 
 会话内命令：`/sessions`、`/load <路径|id|latest>`、`/save`。
+
+### 进度事件 / 取消 / 压缩
+
+- `ReActAgent(on_progress=...)` 会收到 `status` / `step` / `assistant_delta` / `skill` / `cancelled` 等事件，供 CLI/Web 实时展示。
+- `Conversation.cancel()` 请求结束当前 turn；`enqueue(text)` 在步间注入中途补充。
+- 历史超过 `react.conversation.compact_after_messages` 时自动摘要压缩；也可 `conv.compact_now()`。
+- 重复同一工具调用或连续失败由 `react.doom_loop` 干预/停止。
+- 工具 Observation 经 `SkillBridge` 统一截断（`skills.output_max_chars`）；`shell_run` 支持协作取消。
 
 ## Plan Mode
 

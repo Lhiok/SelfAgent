@@ -79,8 +79,22 @@ def parse_react_output(text: str) -> ParsedReAct:
         result.actions.append(
             ParsedAction(
                 action=name,
-                action_input=(raw_input or "").strip(),
+                action_input=_normalize_action_input(raw_input or ""),
             )
         )
 
     return result
+
+
+def _normalize_action_input(raw: str) -> str:
+    """去掉围栏 ```json，便于后续 JSON 解析。"""
+    text = (raw or "").strip()
+    if not text.startswith("```"):
+        return text
+    lines = text.splitlines()
+    if not lines:
+        return text
+    body = lines[1:]
+    if body and body[-1].strip().startswith("```"):
+        body = body[:-1]
+    return "\n".join(body).strip()
