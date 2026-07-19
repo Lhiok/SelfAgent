@@ -154,35 +154,69 @@ class ShellRunSkill(Skill):
         if not cwd.is_dir():
             return SkillResult(ok=False, output=f"工作目录不存在: {cwd_rel}")
 
+        control = kwargs.get("_control")
         logger.notice(f"shell_run: {command!r} cwd={cwd}")
         try:
-            completed = subprocess.run(
+            proc = subprocess.Popen(
                 argv,
                 cwd=str(cwd),
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=timeout,
                 shell=False,
-                check=False,
             )
-        except subprocess.TimeoutExpired:
-            return SkillResult(ok=False, output=f"命令超时（>{timeout}s）: {command}")
         except OSError as exc:
             return SkillResult(ok=False, output=f"执行失败: {exc}")
 
-        stdout = _clip(completed.stdout or "", self.max_output_chars)
-        stderr = _clip(completed.stderr or "", self.max_output_chars)
+        import time
+
+        deadline = time.monotonic() + max(0.1, timeout)
+        try:
+            while proc.poll() is None:
+                if control is not None and getattr(control, "cancel_requested", False):
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait(timeout=2)
+                    return SkillResult(
+                        ok=False,
+                        output=f"已取消: {command}",
+                        data={"command": command, "argv": argv, "cancelled": True},
+                    )
+                if time.monotonic() >= deadline:
+                    proc.kill()
+                    try:
+                        proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    return SkillResult(
+                        ok=False, output=f"命令超时（>{timeout}s）: {command}"
+                    )
+                time.sleep(0.05)
+            stdout_raw, stderr_raw = proc.communicate()
+        except Exception as exc:  # noqa: BLE001
+            try:
+                proc.kill()
+            except Exception:  # noqa: BLE001
+                pass
+            return SkillResult(ok=False, output=f"执行失败: {exc}")
+
+        stdout = _clip(stdout_raw or "", self.max_output_chars)
+        stderr = _clip(stderr_raw or "", self.max_output_chars)
+        exit_code = proc.returncode if proc.returncode is not None else -1
         payload = {
             "command": command,
             "argv": argv,
             "cwd": str(cwd.relative_to(self.root)).replace("\\", "/") or ".",
-            "exit_code": completed.returncode,
+            "exit_code": exit_code,
             "stdout": stdout,
             "stderr": stderr,
         }
-        ok = completed.returncode == 0
+        ok = exit_code == 0
         text = json.dumps(payload, ensure_ascii=False, indent=2)
         if not ok:
             return SkillResult(ok=False, output=text, data=payload)

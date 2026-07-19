@@ -1,5 +1,6 @@
 ﻿from skills.ask_user import AskUserSkill
 from skills.base import Skill, SkillResult
+from skills.bridge import SkillBridge, parse_arguments
 from skills.browser import BrowserSkill
 from skills.csharp import CsharpSkill
 from skills.diff_review import DiffReviewSkill
@@ -37,6 +38,9 @@ __all__ = [
     "TodoTrackerSkill",
     "WebFetchSkill",
     "Skill",
+    "SkillBridge",
     "SkillResult",
     "SkillRegistry",
+    "parse_arguments",
 ]
+
