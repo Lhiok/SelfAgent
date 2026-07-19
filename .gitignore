@@ -64,3 +64,13 @@ desktop.ini
 # Packaging / install leftovers
 src/*.egg-info/
 *.pth
+
+# Local agent runtime (memory / plans / workflow runs)
+.selfagent/
+
+# Node / desktop leftovers when switching from app
+node_modules/
+packages/
+packages/*/node_modules/
+packages/*/dist/
+packages/*/dist-electron/
