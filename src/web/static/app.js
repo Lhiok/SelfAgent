@@ -7,7 +7,7 @@
     busy: false,
     showArchived: false,
     archiveOpen: {}, // workspaceId -> bool (local UI for archived group)
-    live: null, // { userMessage, status, steps[], error, ask }
+    live: null, // { userMessage, status, steps[], error, ask, draft, skills[], cancelled }
     streaming: false, // 是否有活动 SSE（刷新后为 false，但仍可能有 pending_ask）
     // 右侧面板：{ type:'change'|'plan'|'detail'|'ask', key, ... }
     inspector: null,
@@ -22,6 +22,7 @@
   const sessionPath = $("session-path");
   const inputMessage = $("input-message");
   const btnSend = $("btn-send");
+  const btnCancelRun = $("btn-cancel-run");
   const btnDeleteSession = $("btn-delete-session");
   const btnToggleArchived = $("btn-toggle-archived");
   const selectDetail = $("select-detail");
@@ -36,6 +37,20 @@
   const inputInspectorWidth = $("input-inspector-width");
   const todoBar = $("todo-bar");
   const shellEl = document.getElementById("app");
+
+  function emptyLive(overrides = {}) {
+    return {
+      userMessage: null,
+      status: "处理中…",
+      steps: [],
+      error: null,
+      ask: null,
+      draft: "",
+      skills: [],
+      cancelled: false,
+      ...overrides,
+    };
+  }
 
   const INSPECTOR_WIDTH_KEY = "selfagent.inspectorWidth";
   const SOUND_MUTE_KEY = "selfagent.soundMuted";
@@ -234,6 +249,10 @@
       b.disabled = busy;
     });
     btnToggleArchived.classList.toggle("active", state.showArchived);
+    if (btnCancelRun) {
+      btnCancelRun.classList.toggle("hidden", !(busy && state.streaming));
+      btnCancelRun.disabled = !(busy && state.streaming);
+    }
   }
 
   function escapeHtml(s) {
@@ -577,13 +596,32 @@
     return btn;
   }
 
+  function renderLiveSkills(skills) {
+    const row = document.createElement("div");
+    row.className = "live-skills";
+    for (const s of skills || []) {
+      const chip = document.createElement("span");
+      const st = s.status || "running";
+      chip.className = `live-skill-chip ${st === "start" || st === "running" ? "running" : st === "ok" ? "ok" : st === "err" ? "err" : ""}`;
+      const mark =
+        st === "ok" ? "✓" : st === "err" ? "✗" : st === "end" ? "·" : "…";
+      chip.textContent = `${mark} ${s.skill || "?"}`;
+      row.appendChild(chip);
+    }
+    return row;
+  }
+
   function renderLivePanel(live) {
     const wrap = document.createElement("div");
-    wrap.className = "bubble assistant live-run";
+    wrap.className = `bubble assistant live-run${live.cancelled ? " cancelled" : ""}`;
 
     const role = document.createElement("div");
     role.className = "role";
-    role.textContent = live.ask ? "助手 · 等待确认" : "助手 · 进行中";
+    role.textContent = live.cancelled
+      ? "助手 · 已取消"
+      : live.ask
+        ? "助手 · 等待确认"
+        : "助手 · 进行中";
     wrap.appendChild(role);
 
     const status = document.createElement("div");
@@ -591,6 +629,17 @@
     status.innerHTML = `<span class="spinner"></span><span class="live-status-text"></span>`;
     status.querySelector(".live-status-text").textContent = live.status || "处理中…";
     wrap.appendChild(status);
+
+    if ((live.skills || []).length) {
+      wrap.appendChild(renderLiveSkills(live.skills));
+    }
+
+    if (live.draft && !live.ask) {
+      const draft = document.createElement("div");
+      draft.className = "live-draft";
+      draft.textContent = live.draft;
+      wrap.appendChild(draft);
+    }
 
     // 等待 ask_user 时：展示方案正文 + 打开面板按钮；过程默认折叠
     if (live.ask) {
@@ -807,13 +856,7 @@
     }
     if (!state.live?.ask || state.live.ask.ask_id !== ask.ask_id) {
       if (!state.live) {
-        state.live = {
-          userMessage: null,
-          status: "等待你的选择…",
-          steps: [],
-          error: null,
-          ask: null,
-        };
+        state.live = emptyLive({ status: "等待你的选择…" });
       }
       state.live.ask = ask;
       state.live.status =
@@ -2223,13 +2266,7 @@
   function applyAskUserEvent(event, { notify = true } = {}) {
     if (!event?.ask_id) return;
     if (!state.live) {
-      state.live = {
-        userMessage: null,
-        status: "等待你的选择…",
-        steps: [],
-        error: null,
-        ask: null,
-      };
+      state.live = emptyLive({ status: "等待你的选择…" });
     }
     const isNewAsk = !state.live.ask || state.live.ask.ask_id !== event.ask_id;
     const questions = normalizeAskQuestions(event);
@@ -2275,6 +2312,37 @@
     return false;
   }
 
+  function updateLiveDraftDom() {
+    if (!state.live) return false;
+    const root = messagesEl.querySelector(".bubble.live-run");
+    if (!root) return false;
+    let draftEl = root.querySelector(".live-draft");
+    const text = state.live.draft || "";
+    if (!text) {
+      if (draftEl) draftEl.remove();
+      return true;
+    }
+    if (!draftEl) {
+      draftEl = document.createElement("div");
+      draftEl.className = "live-draft";
+      const status = root.querySelector(".live-status");
+      const skills = root.querySelector(".live-skills");
+      const anchor = skills || status;
+      if (anchor && anchor.nextSibling) {
+        root.insertBefore(draftEl, anchor.nextSibling);
+      } else if (anchor) {
+        anchor.after(draftEl);
+      } else {
+        root.appendChild(draftEl);
+      }
+    }
+    draftEl.textContent = text;
+    const nearBottom =
+      messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 120;
+    if (nearBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
+    return true;
+  }
+
   function patchLivePanelDom() {
     if (!state.live) return false;
     const existing = messagesEl.querySelector(".bubble.live-run");
@@ -2303,7 +2371,66 @@
       if (!updateLiveStatusDom()) renderSession();
       return;
     }
+    if (event.type === "assistant_delta") {
+      const delta = event.delta || "";
+      if (!delta) return;
+      // 新一步开始流式时清空上一轮草稿
+      if (
+        event.step != null &&
+        state.live._draftStep != null &&
+        event.step !== state.live._draftStep
+      ) {
+        state.live.draft = "";
+      }
+      if (event.step != null) state.live._draftStep = event.step;
+      state.live.draft = (state.live.draft || "") + delta;
+      if (!updateLiveDraftDom()) {
+        if (!patchLivePanelDom()) renderSession();
+      }
+      return;
+    }
+    if (event.type === "skill") {
+      const name = event.skill || "?";
+      const st = event.status || "start";
+      if (!Array.isArray(state.live.skills)) state.live.skills = [];
+      const idx = state.live.skills.findIndex(
+        (s) => s.skill === name && (s.status === "start" || s.status === "running")
+      );
+      if (st === "start") {
+        state.live.skills.push({ skill: name, status: "start" });
+        if (!state.live.ask) {
+          state.live.status = event.message || `执行 ${name}…`;
+        }
+      } else if (st === "end" || st === "update") {
+        const target =
+          idx >= 0
+            ? state.live.skills[idx]
+            : { skill: name, status: "start" };
+        if (idx < 0) state.live.skills.push(target);
+        if (st === "end") {
+          target.status = event.ok === false ? "err" : "ok";
+        }
+      }
+      // 只保留最近若干 chip，避免刷屏
+      if (state.live.skills.length > 12) {
+        state.live.skills = state.live.skills.slice(-12);
+      }
+      if (!patchLivePanelDom()) renderSession();
+      else updateLiveStatusDom();
+      return;
+    }
+    if (event.type === "cancelled") {
+      state.live.cancelled = true;
+      state.live.status = event.message || "已取消本轮任务";
+      state.live.draft = "";
+      if (!patchLivePanelDom()) renderSession();
+      setBusy(true, "正在停止…");
+      return;
+    }
     if (event.type === "step") {
+      // 完整 step 到达后清空流式草稿（已并入 timeline）
+      state.live.draft = "";
+      state.live._draftStep = null;
       const idx = state.live.steps.findIndex((s) => s.index === event.index);
       const item = {
         index: event.index,
@@ -2906,13 +3033,7 @@
       state.inspector = null;
       renderInspector();
     }
-    state.live = {
-      userMessage: null,
-      status: "开始执行计划…",
-      steps: [],
-      error: null,
-      ask: null,
-    };
+    state.live = emptyLive({ status: "开始执行计划…" });
     renderSession();
     try {
       const result = await streamEvents(
@@ -2953,13 +3074,10 @@
     unlockAudio();
     setBusy(true, "Agent 运行中…");
     state.streaming = true;
-    state.live = {
+    state.live = emptyLive({
       userMessage: message,
       status: "开始处理…",
-      steps: [],
-      error: null,
-      ask: null,
-    };
+    });
     renderSession();
     try {
       const result = await streamEvents(
@@ -3007,6 +3125,24 @@
       }
     }
   };
+
+  if (btnCancelRun) {
+    btnCancelRun.onclick = async () => {
+      if (!state.sessionId || !state.streaming) return;
+      btnCancelRun.disabled = true;
+      statusText.textContent = "正在停止…";
+      try {
+        await api(`/api/sessions/${state.sessionId}/cancel`, { method: "POST" });
+        if (state.live) {
+          state.live.status = "已请求取消，等待当前步结束…";
+          updateLiveStatusDom();
+        }
+      } catch (err) {
+        alert(err.message || String(err));
+        btnCancelRun.disabled = false;
+      }
+    };
+  }
 
   const btnSound = $("btn-sound");
   if (btnSound) {

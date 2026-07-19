@@ -137,3 +137,30 @@ def test_chat_stream_sse(tmp_path, monkeypatch):
     assert '"type": "step"' in body or '"type":"step"' in body
     assert '"type": "done"' in body or '"type":"done"' in body
     assert "api-ok" in body
+
+
+def test_cancel_run_endpoint(tmp_path, monkeypatch):
+    root = tmp_path / "wsroot"
+    proj = tmp_path / "code"
+    proj.mkdir()
+    store = WorkspaceStore(root=root)
+
+    def _fake_agent(workdir: str, *, detail: str | None = None) -> ReActAgent:
+        return ReActAgent(
+            ai=_AI(),
+            skills=SkillRegistry(permission=PermissionGuard.allow_all()),
+            permission=PermissionGuard.allow_all(),
+            workdir=workdir,
+            detail=detail or "off",
+        )
+
+    monkeypatch.setattr(store, "_make_agent", _fake_agent)
+    client = TestClient(create_app(store=store))
+    wid = client.post("/api/workspaces", json={"path": str(proj)}).json()["id"]
+    sid = client.post(f"/api/workspaces/{wid}/sessions", json={}).json()["session_id"]
+
+    # 先触发一次对话以加载会话
+    client.post(f"/api/sessions/{sid}/chat", json={"message": "hi"})
+    res = client.post(f"/api/sessions/{sid}/cancel")
+    assert res.status_code == 200
+    assert res.json().get("cancelled") is True

@@ -199,6 +199,15 @@ def create_app(store: WorkspaceStore | None = None) -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+    @app.post("/api/sessions/{session_id}/cancel")
+    def cancel_run(session_id: str) -> dict[str, Any]:
+        try:
+            return store_of().cancel_run(session_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
     @app.post("/api/sessions/{session_id}/chat/stream")
     async def chat_stream(session_id: str, body: ChatBody) -> StreamingResponse:
         store = store_of()

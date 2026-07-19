@@ -1094,6 +1094,83 @@ select {
   gap: 4px;
 }
 
+.live-draft {
+  margin: 6px 0 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(61, 158, 143, 0.08);
+  border: 1px solid rgba(61, 158, 143, 0.18);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow: auto;
+  font-family: var(--mono);
+  color: var(--text);
+}
+
+.live-draft::before {
+  content: "流式输出";
+  display: block;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 4px;
+  font-family: var(--sans, inherit);
+}
+
+.live-skills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 0 8px;
+}
+
+.live-skill-chip {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(61, 158, 143, 0.28);
+  background: rgba(61, 158, 143, 0.1);
+  color: var(--accent);
+  font-family: var(--mono);
+}
+
+.live-skill-chip.running {
+  animation: pulse-soft 1.2s ease-in-out infinite;
+}
+
+.live-skill-chip.ok {
+  border-color: rgba(61, 158, 143, 0.45);
+  color: var(--accent);
+}
+
+.live-skill-chip.err {
+  border-color: rgba(200, 80, 80, 0.45);
+  background: rgba(200, 80, 80, 0.08);
+  color: #c45;
+}
+
+@keyframes pulse-soft {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.live-run.cancelled .live-status {
+  color: var(--muted);
+}
+
+.live-run.cancelled .spinner {
+  display: none;
+}
+
+.btn.hidden {
+  display: none !important;
+}
+
 .live-step {
   border-left: 2px solid var(--accent-dim);
   padding: 2px 0 2px 8px;
