@@ -38,6 +38,17 @@ def test_local_file_list_read_write_patch(tmp_path):
     assert patched.ok
     assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "hello selfagent"
 
+    # CRLF 文件 + LF old_text 仍应匹配
+    (tmp_path / "win.txt").write_bytes(b"line1\r\nline2\r\n")
+    crlf_ok = skill.run(
+        action="patch",
+        path="win.txt",
+        old_text="line2\n",
+        new_text="patched\n",
+    )
+    assert crlf_ok.ok, crlf_ok.output
+    assert b"patched" in (tmp_path / "win.txt").read_bytes()
+
     written = skill.run(action="write", path="b.txt", content="new")
     assert written.ok
     assert (tmp_path / "b.txt").read_text(encoding="utf-8") == "new"

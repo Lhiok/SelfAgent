@@ -13,6 +13,23 @@ from skills.base import Skill, SkillResult
 logger = get_logger("skills.local_file")
 
 
+def _normalize_newlines(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _patch_newline_tolerant(original: str, old: str, new: str) -> str | None:
+    """在忽略 CRLF/LF 差异时做唯一替换；写出时保留原文件换行风格。"""
+    orig_n = _normalize_newlines(original)
+    old_n = _normalize_newlines(old)
+    new_n = _normalize_newlines(new)
+    if not old_n or orig_n.count(old_n) != 1:
+        return None
+    updated_n = orig_n.replace(old_n, new_n, 1)
+    if "\r\n" in original:
+        return updated_n.replace("\n", "\r\n")
+    return updated_n
+
+
 class LocalFileSkill(Skill):
     name = "local_file"
     description = (
@@ -195,14 +212,27 @@ class LocalFileSkill(Skill):
         old = str(old_text)
         new = str(new_text)
         count = original.count(old)
-        if count == 0:
-            return SkillResult(ok=False, output="未找到匹配的 old_text")
+        updated: str | None = None
+        if count == 1:
+            updated = original.replace(old, new, 1)
+        elif count == 0:
+            # 容忍 CRLF/LF 差异（Windows 工程常见）
+            updated = _patch_newline_tolerant(original, old, new)
+            if updated is None:
+                return SkillResult(
+                    ok=False,
+                    output=(
+                        "未找到匹配的 old_text。"
+                        "请先 read 该文件核对原文（换行/缩进须一致），勿复用过期片段。"
+                    ),
+                )
+            count = 1
         if count > 1:
             return SkillResult(
                 ok=False,
                 output=f"old_text 匹配到 {count} 处，请提供更唯一的片段",
             )
-        updated = original.replace(old, new, 1)
+        assert updated is not None
         target.write_text(updated, encoding=encoding)
         logger.notice(f"已 patch 文件: {target}")
         rel = str(target.relative_to(self.root)).replace("\\", "/")
