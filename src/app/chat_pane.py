@@ -1029,6 +1029,7 @@ class ChatPane(QWidget):
         self._live_draft_step: int | None = None
         self._live_skills: list[dict[str, Any]] = []
         self._live_cancelled = False
+        self._live_thinking = False
         self._live_dirty = False
         self._live_flush_timer = QTimer(self)
         self._live_flush_timer.setSingleShot(True)
@@ -1153,6 +1154,7 @@ class ChatPane(QWidget):
         self._live_draft_step = None
         self._live_skills = []
         self._live_cancelled = False
+        self._live_thinking = False
         self._body_parts.append(("user", user_text))
         self._body_parts.append(
             ("live", "<div class='live'><div class='role'>助手 · 进行中</div></div>")
@@ -1165,19 +1167,34 @@ class ChatPane(QWidget):
         self._live_status = message or self._live_status
         self._schedule_live_refresh()
 
+    def is_live_thinking(self) -> bool:
+        return bool(self._live_thinking)
+
+    def set_live_thinking(self, thinking: bool) -> None:
+        self._live_thinking = bool(thinking)
+
     def update_live_steps(self, steps: list[dict[str, Any]]) -> None:
         self._live_steps = steps
         self._live_draft = ""
         self._live_draft_step = None
-        self._flush_live_panel()
+        self._live_thinking = False
+        self._schedule_live_refresh()
         all_ch: list[dict[str, Any]] = []
         for step in steps:
             all_ch.extend(c for c in (step.get("changes") or []) if isinstance(c, dict))
         self._set_live_changes(all_ch)
 
-    def append_assistant_delta(self, delta: str, *, step: int | None = None) -> None:
+    def append_assistant_delta(
+        self,
+        delta: str,
+        *,
+        step: int | None = None,
+        phase: str | None = None,
+    ) -> None:
         if not delta:
             return
+        if phase == "thinking":
+            self._live_thinking = True
         if (
             step is not None
             and self._live_draft_step is not None
@@ -1190,7 +1207,7 @@ class ChatPane(QWidget):
         if len(self._live_draft) > 1200:
             self._live_draft = "…" + self._live_draft[-1199:]
         # 思考中不展示草稿，跳过 UI 刷新（流式 token 极多，全量重绘会卡死）
-        if "思考" in (self._live_status or ""):
+        if self._live_thinking:
             return
         self._schedule_live_refresh()
 
@@ -1222,6 +1239,7 @@ class ChatPane(QWidget):
 
     def mark_cancelled(self, message: str = "") -> None:
         self._live_cancelled = True
+        self._live_thinking = False
         self._live_status = message or "已取消本轮任务"
         self._live_draft = ""
         self._flush_live_panel()
@@ -1235,6 +1253,7 @@ class ChatPane(QWidget):
         self._live_draft = ""
         self._live_skills = []
         self._live_cancelled = False
+        self._live_thinking = False
         self._paint()
 
     def set_pending_plan(self, plan: dict[str, Any] | None) -> None:
@@ -1381,7 +1400,7 @@ class ChatPane(QWidget):
             self._format_live_skills(),
         ]
         # 思考阶段只展示短预览，避免整段 ReAct 原文把中间区撑空/卡顿
-        thinking = "思考" in (self._live_status or "")
+        thinking = self._live_thinking
         if self._live_draft and not self._live_cancelled and not thinking:
             draft = self._live_draft
             if len(draft) > 800:

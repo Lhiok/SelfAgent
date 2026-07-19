@@ -284,14 +284,17 @@ class MainWindow(QMainWindow):
             self.chat.set_status(msg or "处理中…")
             self.chat.update_live_status(msg)
         elif etype == "assistant_delta":
-            # 思考阶段不刷草稿，直接丢弃，防止事件风暴卡住 UI
-            status = self.chat.status.text() if hasattr(self.chat, "status") else ""
-            if "思考" in status:
+            # 思考阶段不刷草稿，防止事件风暴卡住 UI
+            phase = str(event.get("phase") or "")
+            if phase == "thinking":
+                self.chat.set_live_thinking(True)
+                return
+            if self.chat.is_live_thinking():
                 return
             delta = str(event.get("delta") or "")
             step = event.get("step")
             step_i = int(step) if isinstance(step, int) else None
-            self.chat.append_assistant_delta(delta, step=step_i)
+            self.chat.append_assistant_delta(delta, step=step_i, phase=phase or None)
         elif etype == "skill":
             self.chat.update_skill_event(event)
             msg = str(event.get("message") or "")
@@ -371,6 +374,14 @@ class MainWindow(QMainWindow):
             return
         dlg = AskDialog(event, self)
         if dlg.exec() != AskDialog.DialogCode.Accepted:
+            # 关闭/取消对话框时唤醒等待中的 ask，避免 worker 卡到超时
+            try:
+                self.store.cancel_run(self._session_id)
+            except Exception:  # noqa: BLE001
+                pass
+            self._pending_ask = None
+            self.chat.set_ask_visible(False)
+            self.chat.set_status("已取消确认")
             return
         ask_id = str(event.get("ask_id") or "")
         answers = dlg.answers_payload()

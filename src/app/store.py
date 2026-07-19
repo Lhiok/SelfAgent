@@ -22,6 +22,8 @@ logger = get_logger("app.store")
 
 DEFAULT_ROOT = Path("logs/workspaces")
 ASK_USER_TIMEOUT_SEC = 1800.0
+# 取消/关闭 ask 对话框时投入队列的哨兵，唤醒 _web_ask
+ASK_CANCEL_SENTINEL = "__SELFAGENT_ASK_CANCELLED__"
 
 
 def _now_iso() -> str:
@@ -376,13 +378,32 @@ class WorkspaceStore:
 
     def cancel_run(self, session_id: str) -> dict[str, Any]:
         """请求取消当前正在执行的 turn（不抢会话锁，避免与运行线程死锁）。"""
+        sid = session_id.strip()
         with self._global:
-            conv = self._convs.get(session_id.strip())
-        if conv is None:
-            # 未在跑则无需加载整会话
-            return {"ok": False, "session_id": session_id, "cancelled": False}
-        conv.cancel()
-        return {"ok": True, "session_id": session_id, "cancelled": True}
+            conv = self._convs.get(sid)
+            pending = self._pending_asks.get(sid)
+        if conv is not None:
+            conv.cancel()
+        # 唤醒卡在 ask_user 上的 worker
+        if pending is not None:
+            answer_q = pending.get("queue")
+            if answer_q is not None:
+                try:
+                    answer_q.put_nowait(ASK_CANCEL_SENTINEL)
+                except queue.Full:
+                    try:
+                        answer_q.get_nowait()
+                    except queue.Empty:
+                        pass
+                    try:
+                        answer_q.put_nowait(ASK_CANCEL_SENTINEL)
+                    except queue.Full:
+                        pass
+        return {
+            "ok": conv is not None or pending is not None,
+            "session_id": session_id,
+            "cancelled": True,
+        }
 
     def enqueue_message(self, session_id: str, text: str) -> dict[str, Any]:
         """向当前 turn 队列中途补充用户消息。"""
@@ -418,7 +439,7 @@ class WorkspaceStore:
         q: queue.Queue[tuple[str, Any]] = queue.Queue()
         # 合并流式 delta，避免把 Qt 事件队列打满导致界面假死、done 迟迟无法处理
         delta_lock = threading.Lock()
-        delta_buf = {"text": "", "step": None, "last": 0.0}
+        delta_buf: dict[str, Any] = {"text": "", "step": None, "phase": None, "last": 0.0}
 
         def _flush_delta(*, force: bool = False) -> None:
             with delta_lock:
@@ -429,18 +450,17 @@ class WorkspaceStore:
                 if not force and (now - float(delta_buf["last"])) < 0.12 and len(text) < 160:
                     return
                 step = delta_buf["step"]
+                phase = delta_buf["phase"]
                 delta_buf["text"] = ""
                 delta_buf["last"] = now
-            q.put(
-                (
-                    "progress",
-                    {
-                        "type": "assistant_delta",
-                        "step": step,
-                        "delta": text,
-                    },
-                )
-            )
+            payload: dict[str, Any] = {
+                "type": "assistant_delta",
+                "step": step,
+                "delta": text,
+            }
+            if phase:
+                payload["phase"] = phase
+            q.put(("progress", payload))
 
         def on_progress(event: dict[str, Any]) -> None:
             if isinstance(event, dict) and event.get("type") == "assistant_delta":
@@ -448,6 +468,8 @@ class WorkspaceStore:
                     delta_buf["text"] += str(event.get("delta") or "")
                     if event.get("step") is not None:
                         delta_buf["step"] = event.get("step")
+                    if event.get("phase") is not None:
+                        delta_buf["phase"] = event.get("phase")
                     # 过长直接截断缓冲，UI 本就不展示全文
                     if len(delta_buf["text"]) > 4000:
                         delta_buf["text"] = "…" + delta_buf["text"][-2000:]
@@ -640,7 +662,10 @@ class WorkspaceStore:
             logger.warning(f"推送 ask_user 事件失败: {exc}")
 
         try:
-            return str(answer_q.get(timeout=ASK_USER_TIMEOUT_SEC))
+            raw = str(answer_q.get(timeout=ASK_USER_TIMEOUT_SEC))
+            if raw == ASK_CANCEL_SENTINEL:
+                raise RuntimeError("用户取消了确认")
+            return raw
         except queue.Empty as exc:
             raise TimeoutError(
                 f"等待用户选择超时（{int(ASK_USER_TIMEOUT_SEC)}s）"
